@@ -99,6 +99,8 @@ Please be aware of the following limitations regarding these applications:
 1. **Create a project folder** and put **exactly one PDF** in it (your slide deck).
 2. Drop in **audio** and/or **video** assets you’ll use (any FFmpeg-supported common formats) into the project folder.
 3. Run the app:
+
+   Click the app icon or,
    ```terminal
    python main.py
    ```
