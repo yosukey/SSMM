@@ -1,0 +1,35 @@
+Simple Slideshow Movie Maker (SSMM)
+==================================================
+
+**IMPORTANT - PLEASE READ CAREFULLY**
+
+By installing, copying, or otherwise using this software, you agree to be bound by the terms of this license. If you do not agree to the terms of this license, do not install or use the software.
+
+--------------------------------------------------
+**1. Disclaimer**
+--------------------------------------------------
+This software is provided 'as is' without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
+
+You use this software at your own risk. The developers assume no responsibility for any loss of data or damage to your system that may result from its use. It is highly recommended to back up your data before using this application.
+
+--------------------------------------------------
+**2. License - Creative Commons BY-NC 4.0**
+--------------------------------------------------
+This software is licensed under the Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) license.
+
+You are free to:
+- Share — copy and redistribute the material in any medium or format
+- Adapt — remix, transform, and build upon the material
+
+Under the following terms:
+- Attribution — You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+- NonCommercial — You may not use the material for commercial purposes.
+
+For commercial use, please contact the author to arrange a separate license.
+
+Full license text: https://creativecommons.org/licenses/by-nc/4.0/
+
+--------------------------------------------------
+**3. Copyright**
+--------------------------------------------------
+Copyright (c) 2025-- Yosuke Yamazaki
