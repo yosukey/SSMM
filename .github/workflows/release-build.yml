@@ -1,0 +1,160 @@
+name: build-release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Update Version in config.py
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.release.tag_name }}"
+          if (-not $ver) { $ver = "${{ github.ref_name }}" }
+          $ver = $ver.TrimStart("v")
+          # Replace the entire function call with a static version string for the build
+          (Get-Content config.py) -replace "APP_VERSION = get_version\(\)", "APP_VERSION = '$ver'" | Set-Content config.py
+          echo "Updated config.py to version $ver for build"
+
+      - name: Make .icns (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p assets/app_icon.iconset
+          sips -z 16 16    assets/app_icon.png --out assets/app_icon.iconset/icon_16x16.png
+          sips -z 32 32    assets/app_icon.png --out assets/app_icon.iconset/icon_16x16@2x.png
+          sips -z 32 32    assets/app_icon.png --out assets/app_icon.iconset/icon_32x32.png
+          sips -z 64 64    assets/app_icon.png --out assets/app_icon.iconset/icon_32x32@2x.png
+          sips -z 128 128  assets/app_icon.png --out assets/app_icon.iconset/icon_128x128.png
+          sips -z 256 256  assets/app_icon.png --out assets/app_icon.iconset/icon_128x128@2x.png
+          sips -z 256 256  assets/app_icon.png --out assets/app_icon.iconset/icon_256x256.png
+          sips -z 512 512  assets/app_icon.png --out assets/app_icon.iconset/icon_256x256@2x.png
+          sips -z 512 512  assets/app_icon.png --out assets/app_icon.iconset/icon_512x512.png
+          sips -z 1024 1024 assets/app_icon.png --out assets/app_icon.iconset/icon_512x512@2x.png
+          iconutil -c icns assets/app_icon.iconset -o assets/app_icon.icns
+
+      - name: Ensure ffmpeg executable bits (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x ffmpeg/bin/ffmpeg ffmpeg/bin/ffprobe 2>/dev/null || true
+
+      # ---------- Build ----------
+      - name: Build for Windows Installer (one-dir)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --noconsole --name "SSMM"
+          --icon assets\app_icon.ico
+          --splash assets\splash_screen.png
+          --add-data "assets;assets"
+          --add-data "agif;agif"
+          --add-data "fonts;fonts"
+          --add-data "ffmpeg;ffmpeg"
+          main.py
+
+      - name: Rename installer build directory
+        if: runner.os == 'Windows'
+        run: move dist dist_for_installer
+
+      - name: Build for Windows Portable (one-file)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --noconsole --onefile --name "SSMM"
+          --icon assets\app_icon.ico
+          --splash assets\splash_screen.png
+          --add-data "assets;assets"
+          --add-data "agif;agif"
+          --add-data "fonts;fonts"
+          --add-data "ffmpeg;ffmpeg"
+          main.py
+
+      - name: Build (macOS arm64 onefile)
+        if: runner.os == 'macOS'
+        run: >
+          pyinstaller --windowed --onefile --name "SSMM"
+          --icon assets/app_icon.icns
+          --add-data "assets:assets"
+          --add-data "agif:agif"
+          --add-data "fonts:fonts"
+          --add-data "ffmpeg:ffmpeg"
+          main.py
+
+      # ---------- Package for Release ----------
+      - name: Package Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Get version from tag
+          $ver = "${{ github.event.release.tag_name }}"
+          if (-not $ver) { $ver = "${{ github.ref_name }}" }
+          $ver = $ver.TrimStart("v")
+
+          # 1. Prepare Portable EXE
+          $portableName = "SSMM-${ver}-windows-portable.exe"
+          Copy-Item "dist/SSMM.exe" $portableName
+          
+          # 2. Install Inno Setup
+          choco install innosetup --no-progress
+          $env:Path += ";C:\Program Files (x86)\Inno Setup 6"
+
+          # 3. Update version in Inno Setup script
+          (Get-Content setup.iss).replace('#define AppVersion "1.0.0"', '#define AppVersion "' + $ver + '"') | Set-Content setup.iss
+          
+          # 4. Compile Inno Setup Installer
+          iscc setup.iss
+          
+          # 5. Prepare installer for release
+          $installerName = "SSMM-${ver}-windows-setup.exe"
+          Copy-Item "Output/*.exe" $installerName
+
+      - name: Install create-dmg (macOS only)
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
+
+      - name: Create DMG (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          VER="${{ github.event.release.tag_name }}"
+          if [ -z "$VER" ]; then VER="${{ github.ref_name }}"; fi
+          VER=$(echo $VER | sed 's/^v//')
+          create-dmg \
+            --volname "SSMM ${VER}" \
+            --window-pos 200 120 \
+            --window-size 600 380 \
+            --background "assets/dmg_background.png" \
+            --icon-size 128 \
+            --icon "SSMM.app" 150 200 \
+            --hide-extension "SSMM.app" \
+            --app-drop-link 450 200 \
+            "SSMM-${VER}-macOS-arm64.dmg" \
+            "dist/"
+
+      # ---------- Attach to Release ----------
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        with:
+          files: |
+            SSMM-*-windows-setup.exe
+            SSMM-*-windows-portable.exe
+            SSMM-*-macOS-arm64.dmg
