@@ -1,0 +1,105 @@
+ffmpeg version n7.1.1-56-gc2184b65d2-20250802 Copyright (c) 2000-2025 the FFmpeg developers
+  built with gcc 15.1.0 (crosstool-NG 1.27.0.42_35c1e72)
+  configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libfribidi --enable-gmp --enable-libxml2 --enable-lzma --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libvorbis --enable-opencl --disable-libpulse --enable-libvmaf --disable-libxcb --disable-xlib --enable-amf --enable-libaom --enable-libaribb24 --disable-avisynth --enable-chromaprint --enable-libdav1d --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librav1e --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-vulkan --enable-libshaderc --enable-libplacebo --enable-libvvenc --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20250802
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.101 / 61. 19.101
+  libavformat    61.  7.100 / 61.  7.100
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  4.100 / 10.  4.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+
+  configuration:
+    --prefix=/ffbuild/prefix
+    --pkg-config-flags=--static
+    --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32-
+    --arch=x86_64
+    --target-os=mingw32
+    --enable-version3
+    --disable-debug
+    --disable-w32threads
+    --enable-pthreads
+    --enable-iconv
+    --enable-zlib
+    --enable-libfribidi
+    --enable-gmp
+    --enable-libxml2
+    --enable-lzma
+    --enable-fontconfig
+    --enable-libharfbuzz
+    --enable-libfreetype
+    --enable-libvorbis
+    --enable-opencl
+    --disable-libpulse
+    --enable-libvmaf
+    --disable-libxcb
+    --disable-xlib
+    --enable-amf
+    --enable-libaom
+    --enable-libaribb24
+    --disable-avisynth
+    --enable-chromaprint
+    --enable-libdav1d
+    --disable-libdavs2
+    --disable-libdvdread
+    --disable-libdvdnav
+    --disable-libfdk-aac
+    --enable-ffnvcodec
+    --enable-cuda-llvm
+    --disable-frei0r
+    --enable-libgme
+    --enable-libkvazaar
+    --enable-libaribcaption
+    --enable-libass
+    --enable-libbluray
+    --enable-libjxl
+    --enable-libmp3lame
+    --enable-libopus
+    --enable-librist
+    --enable-libssh
+    --enable-libtheora
+    --enable-libvpx
+    --enable-libwebp
+    --enable-libzmq
+    --enable-lv2
+    --enable-libvpl
+    --enable-openal
+    --enable-libopencore-amrnb
+    --enable-libopencore-amrwb
+    --enable-libopenh264
+    --enable-libopenjpeg
+    --enable-libopenmpt
+    --enable-librav1e
+    --disable-librubberband
+    --enable-schannel
+    --enable-sdl2
+    --enable-libsnappy
+    --enable-libsoxr
+    --enable-libsrt
+    --enable-libsvtav1
+    --enable-libtwolame
+    --enable-libuavs3d
+    --disable-libdrm
+    --enable-vaapi
+    --disable-libvidstab
+    --enable-vulkan
+    --enable-libshaderc
+    --enable-libplacebo
+    --enable-libvvenc
+    --disable-libx264
+    --disable-libx265
+    --disable-libxavs2
+    --disable-libxvid
+    --enable-libzimg
+    --enable-libzvbi
+    --extra-cflags=-DLIBTWOLAME_STATIC
+    --extra-cxxflags=
+    --extra-libs=-lgomp
+    --extra-ldflags=-pthread
+    --extra-ldexeflags=
+    --cc=x86_64-w64-mingw32-gcc
+    --cxx=x86_64-w64-mingw32-g++
+    --ar=x86_64-w64-mingw32-gcc-ar
+    --ranlib=x86_64-w64-mingw32-gcc-ranlib
+    --nm=x86_64-w64-mingw32-gcc-nm
+    --extra-version=20250802
