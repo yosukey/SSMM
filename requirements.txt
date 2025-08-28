@@ -1,0 +1,9 @@
+PySide6
+pymupdf
+pillow
+toml
+pyqtdarktheme>=2.1.0
+psutil
+imagehash
+numpy
+packaging
