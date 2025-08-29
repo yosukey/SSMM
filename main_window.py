@@ -1264,13 +1264,13 @@ class MainWindow(QWidget):
         except Exception as e:
             raise ValueError(f"Failed to read PDF file '{pdf_path.name}': {e}")
             
-    def _automap_materials(self):
-        for material_name in self.project_model.available_materials:
+    def _automap_materials(self, project_model: ProjectModel):
+        for material_name in project_model.available_materials:
             match = re.match(r'\[(\d{3})\]', material_name)
             if match:
                 slide_index = int(match.group(1)) - 1
-                if 0 <= slide_index < len(self.project_model.slides) and self.project_model.slides[slide_index].filename is None:
-                    self.project_model.slides[slide_index].filename = material_name
+                if 0 <= slide_index < len(project_model.slides) and project_model.slides[slide_index].filename is None:
+                    project_model.slides[slide_index].filename = material_name
 
     def select_output_folder(self):
         folder_str = QFileDialog.getExistingDirectory(self, self.tr("Select Output Folder"))

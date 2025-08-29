@@ -42,7 +42,7 @@ class ProjectSetupWorker(QObject):
             elif self.path.is_dir():
                 project_model = ProjectModel(project_folder=self.path)
                 main_window.initialize_project_from_pdf(project_model)
-                main_window._automap_materials()
+                main_window._automap_materials(project_model)
                 self.validator.probe_and_cache_all_materials(project_model)
                 self.validator.compute_and_populate_pdf_details(project_model)
             else:
