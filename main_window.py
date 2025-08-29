@@ -1063,12 +1063,16 @@ class MainWindow(QWidget):
             self.on_worker_thread_finished()
             return
 
+        self.on_worker_thread_finished()
+
         self.last_validation_messages = messages
         self.page_count = page_count
         self.validation_results_text.setHtml(messages.assemble_html(theme=self.current_theme))
 
         validation_had_errors = messages.has_errors()
         if not validation_had_errors:
+            self.state_machine.transition_to(AppState.VALIDATED)
+
             if not self.has_validated_once:
                 self.check_for_updates()
 
@@ -1076,11 +1080,10 @@ class MainWindow(QWidget):
             self.has_validated_once = True
 
             self.tabs.setCurrentWidget(self.slide_settings_tab)
-            self.state_machine.transition_to(AppState.VALIDATED)
         else:
+            self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
             QMessageBox.critical(self, self.tr("Validation Failed"), self.tr("Errors were found that prevent video creation.\nSee 'Validation Result' tab for details."))
             self.tabs.setCurrentWidget(self.validation_results_tab)
-            self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
         
         self.slide_table_manager.populate_slide_table_from_model()
         self.slide_table_manager.toggle_previews(self.preview_pinp_checkbox.isChecked())
