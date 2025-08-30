@@ -353,9 +353,21 @@ class MainWindow(QWidget):
             "including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. "
             "In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, "
             "whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software "
-            "or the use or other dealings in the software.\n\n"
+            "or the use or other dealings in the software.\n"
             "You use this software at your own risk. The developers assume no responsibility for any loss of data or damage "
-            "to your system that may result from its use. It is highly recommended to back up your data before using this application."
+            "to your system that may result from its use. It is highly recommended to back up your data before using this application.\n\n"
+            "This application assumes that you will use only materials for which you hold the rights or for which you have obtained valid permission. "
+            "These materials may include PDFs, images, audio, and video."
+            "You are responsible for ensuring that your use does not violate third-party copyrights. "
+            "Where applicable, this includes related and neighboring rights. You must also respect rights of publicity and portrait rights, "
+            "trademarks, privacy rights, and any other rights."
+            "In addition, you must comply with your institution’s rules, contracts, and the terms of service of any platforms you use.\n"
+            "You are solely responsible for clearing all rights and for providing any required notices when you publish or distribute videos created with this app. "
+            "This includes credits, source attributions, license notices, and compliance with quotation or fair-use requirements where applicable."
+            "The provider of this app does not review your materials or workflows. The provider accepts no liability for any loss or damage arising from your use. "
+            "If needed, consult a qualified professional. This text does not constitute legal advice.\n"
+            "Note: The app itself is licensed under CC BY-NC 4.0. "
+            "That license applies to the app only. It does not grant or guarantee any rights in your input materials or in your exported videos."
         )
         self.disclaimer_text_edit.setText(disclaimer_text)
 

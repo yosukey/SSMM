@@ -253,6 +253,14 @@ or the use or other dealings in the software.
 You use this software at your own risk. The developers assume no responsibility for any loss of data or damage 
 to your system that may result from its use. It is highly recommended to back up your data before using this application.
 
+### Content & Publication Disclaimer
+
+This application assumes that you will use only materials for which you hold the rights or for which you have obtained valid permission. You are responsible for ensuring that your use does not violate third-party copyrights (and, where applicable, related/neighboring rights), rights of publicity and portrait rights, trademarks, privacy or other rights, and that you comply with your institution’s rules, contracts, and any platform terms of service.
+
+You are solely responsible for all rights clearances and required notices when publishing or distributing videos created with this app (including credits, source attributions, license notices, and compliance with quotation/fair-use requirements, as applicable). The app provider does not review your materials or workflows and accepts no liability for any resulting loss or damage. If needed, consult a qualified professional. This is not legal advice.
+
+Note: The app itself is licensed under CC BY-NC 4.0. That license applies to the app only; it does not grant or guarantee any rights in your input materials or your exported videos.
+
 ### Font License
 
 This application bundles Noto Sans by Google and Adobe. It is available under the SIL Open Font License (OFL), a free and open source license. You can find the full text of the license in the "Licenses" tab within the application.
