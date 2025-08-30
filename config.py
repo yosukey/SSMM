@@ -16,7 +16,7 @@ def get_version():
         version = git_process.stdout.strip().lstrip('v')
         return version
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return '0.9.2'
+        return '0.9.4'
 
 APP_VERSION = get_version()
 REPO_URL = "https://github.com/yosukey/SSMM"
