@@ -309,7 +309,7 @@ class ProjectValidator:
         
         return encoders
 
-    def get_functional_hw_encoders(self) -> tuple[dict[str, list[str]], list[str]]:
+    def get_functional_encoders(self) -> tuple[dict[str, list[str]], list[str]]:
         log_messages = ["[INFO] --- Encoder Functionality Test Start ---"]
         all_available_encoders = self._get_available_encoders()
         if not all_available_encoders:
@@ -502,11 +502,12 @@ class ProjectValidator:
         options = set()
         functional_encoders = functional_encoders_map.get(codec, [])
 
-        software_encoders_for_codec = [
+        potential_software_encoders = [
             enc for enc in config.SUPPORTED_CODEC_CHECKS.get(codec, [])
             if enc.startswith('lib') or enc == 'mpeg4'
         ]
-        if software_encoders_for_codec:
+
+        if set(potential_software_encoders) & set(functional_encoders):
             options.add("None")
 
         for enc in functional_encoders:
