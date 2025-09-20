@@ -64,6 +64,7 @@ class ProjectValidator:
         self._is_canceled = False
         self.log = logger if callable(logger) else lambda *args, **kwargs: None
         self.validated_pdf_path: Path | None = None
+        self.validated_pdf_structure: Optional[dict] = None
         self.validated_pdf_hash: str | None = None
 
     def analyze_material(self, material_path: Path, slide: Slide):
@@ -228,6 +229,9 @@ class ProjectValidator:
         except Exception as e:
             self.log(f"[ERROR] Could not get details for PDF {pdf_path.name}: {e}")
             return None
+        finally:
+            if doc:
+                doc.close()
 
     def probe_and_cache_all_materials(self, project_model: ProjectModel):
         if not project_model or not project_model.project_folder:
@@ -1014,7 +1018,13 @@ class ProjectValidator:
             
             data = json.loads(result.stdout)
             format_data = data.get('format', {})
-            duration = float(format_data.get('duration', 0.0))
+            
+            duration_str = format_data.get('duration')
+            try:
+                duration = float(duration_str)
+            except (ValueError, TypeError):
+                duration = 0.0
+            
             overall_bitrate_bps_str = format_data.get('bit_rate')
 
             video_info = {}
