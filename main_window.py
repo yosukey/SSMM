@@ -367,7 +367,7 @@ class MainWindow(QWidget):
             "This includes credits, source attributions, license notices, and compliance with quotation or fair-use requirements where applicable."
             "The provider of this app does not review your materials or workflows. The provider accepts no liability for any loss or damage arising from your use. "
             "If needed, consult a qualified professional. This text does not constitute legal advice.\n"
-            "Note: The app itself is licensed under CC BY-NC 4.0. "
+            "Note: The app itself is licensed under the MIT License. "
             "That license applies to the app only. It does not grant or guarantee any rights in your input materials or in your exported videos."
         )
         self.disclaimer_text_edit.setText(disclaimer_text)

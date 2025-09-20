@@ -290,7 +290,7 @@ class Ui_MainWindow(object):
         app_license_label.setOpenExternalLinks(True)
         app_license_label.setText(
             MainWindow.tr("Author: Y. Yamazaki<br>"
-            "License: <a href='https://creativecommons.org/licenses/by-nc/4.0/'>CC BY-NC 4.0</a>")
+            "License: <a href='https://opensource.org/licenses/MIT'>MIT License</a>")
         )
         app_license_label.setWordWrap(True)
         licenses_layout.addWidget(app_license_header)
