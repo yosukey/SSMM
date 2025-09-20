@@ -990,7 +990,7 @@ class MainWindow(QWidget):
     def _find_single_pdf(self, folder: Path) -> Optional[Path]:
         if not folder or not folder.is_dir():
             return None
-        pdfs = list(folder.glob('*.pdf'))
+        pdfs = list(folder.glob('*.[pP][dD][fF]'))
         if not pdfs:
             raise FileNotFoundError(self.tr("No PDF file found in the selected project folder."))
         if len(pdfs) > 1:
