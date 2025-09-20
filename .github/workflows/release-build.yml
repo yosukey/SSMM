@@ -108,9 +108,12 @@ jobs:
           $ver = "${{ github.event.release.tag_name }}"
           if (-not $ver) { $ver = "${{ github.ref_name }}" }
           $ver = $ver.TrimStart("v")
+          
+          # Get architecture from runner context
+          $arch = "${{ runner.arch }}".ToLower()
 
           # 1. Prepare Portable EXE
-          $portableName = "SSMM-${ver}-windows-portable.exe"
+          $portableName = "SSMM-${ver}-windows-${arch}-portable.exe"
           Copy-Item "dist/SSMM.exe" $portableName
           
           # 2. Install Inno Setup
@@ -124,7 +127,7 @@ jobs:
           iscc setup.iss
           
           # 5. Prepare installer for release
-          $installerName = "SSMM-${ver}-windows-setup.exe"
+          $installerName = "SSMM-${ver}-windows-${arch}-setup.exe"
           Copy-Item "Output/*.exe" $installerName
 
       - name: Install create-dmg (macOS only)
@@ -137,6 +140,10 @@ jobs:
           VER="${{ github.event.release.tag_name }}"
           if [ -z "$VER" ]; then VER="${{ github.ref_name }}"; fi
           VER=$(echo $VER | sed 's/^v//')
+          
+          # Get architecture from runner context
+          ARCH=$(echo "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')
+          
           create-dmg \
             --volname "SSMM ${VER}" \
             --window-pos 200 120 \
@@ -146,7 +153,7 @@ jobs:
             --icon "SSMM.app" 150 200 \
             --hide-extension "SSMM.app" \
             --app-drop-link 450 200 \
-            "SSMM-${VER}-macOS-arm64.dmg" \
+            "SSMM-${VER}-macOS-${ARCH}.dmg" \
             "dist/"
 
       # ---------- Attach to Release ----------
@@ -155,6 +162,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
           files: |
-            SSMM-*-windows-setup.exe
-            SSMM-*-windows-portable.exe
-            SSMM-*-macOS-arm64.dmg
+            SSMM-*-windows-*-setup.exe
+            SSMM-*-windows-*-portable.exe
+            SSMM-*-macOS-*.dmg
