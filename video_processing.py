@@ -10,7 +10,7 @@ import re
 import json
 import shutil
 
-from PySide6.QtCore import QObject, Signal, Slot, QProcess, QEventLoop
+from PySide6.QtCore import QObject, Signal, Slot, QProcess, QEventLoop, QTimer
 import fitz
 
 from models import ProjectModel, Slide, ProjectParameters
@@ -267,7 +267,7 @@ class VideoProcessor(QObject):
         finally:
             self.watermark_path = None
 
-    def _run_subprocess(self, command):
+    def _run_subprocess(self, command, capture_output=False, timeout_sec=None):
         if self._is_canceled:
             raise ProcessingCanceled()
 
@@ -276,9 +276,10 @@ class VideoProcessor(QObject):
         process = QProcess()
         process.setProcessChannelMode(QProcess.MergedChannels)
 
-        process.readyReadStandardOutput.connect(
-            lambda: self.log_message.emit(process.readAllStandardOutput().data().decode(errors='replace').strip(), 'ffmpeg')
-        )
+        if not capture_output:
+            process.readyReadStandardOutput.connect(
+                lambda: self.log_message.emit(process.readAllStandardOutput().data().decode(errors='replace').strip(), 'ffmpeg')
+            )
 
         with self.process_lock:
             self.active_processes.append(process)
@@ -287,6 +288,13 @@ class VideoProcessor(QObject):
         process.finished.connect(loop.quit)
         process.errorOccurred.connect(loop.quit)
         
+        timer = None
+        if timeout_sec:
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+            timer.start(int(timeout_sec * 1000))
+
         process.start(command[0], command[1:])
         
         if self._is_canceled:
@@ -295,7 +303,12 @@ class VideoProcessor(QObject):
 
         loop.exec()
 
+        timed_out = timer and not timer.isActive()
+
         exit_code = process.exitCode()
+        
+        output_str = ""
+        output_str = process.readAllStandardOutput().data().decode(errors='replace')
         
         with self.process_lock:
             if process in self.active_processes:
@@ -303,10 +316,17 @@ class VideoProcessor(QObject):
         
         if self._is_canceled:
              raise ProcessingCanceled()
+        
+        if timed_out:
+            process.kill()
+            raise TimeoutError(f"Process timed out after {timeout_sec} seconds.")
 
         if exit_code != 0 or process.error() != QProcess.UnknownError:
             error_string = process.errorString()
-            raise Exception(f"Command exited with status {exit_code} and error '{process.error()}': {error_string}")
+            raise Exception(f"Command exited with status {exit_code} and error '{process.error()}': {error_string}\nOutput:\n{output_str}")
+
+        if capture_output:
+            return output_str
 
     def _generate_single_slide_video(self, slide_info: tuple, output_path: Path = None) -> tuple[int, Path]:
         if self._is_canceled:
@@ -1013,7 +1033,7 @@ class VideoProcessor(QObject):
 
     def _get_loudnorm_params(self, media_path: Path) -> str:
         builder = self._create_ffmpeg_builder()
-        builder.add_global_options('-loglevel', 'info') 
+        builder.global_options = [opt for opt in builder.global_options if opt not in ['-loglevel', 'info']]
         
         command = (
             builder
@@ -1022,13 +1042,12 @@ class VideoProcessor(QObject):
                 .build()
         )
         
-        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=config.SUBPROCESS_CREATION_FLAGS)
+        LOUDNORM_TIMEOUT_SEC = 600
+        output_str = self._run_subprocess(command, capture_output=True, timeout_sec=LOUDNORM_TIMEOUT_SEC)
         
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg loudnorm analysis failed. Stderr: {result.stderr}")
-        
-        json_match = re.search(r'(\{[\s\S]*\})', result.stderr, re.MULTILINE)
+        json_match = re.search(r'(\{[\s\S]*\})', output_str, re.MULTILINE)
         if not json_match:
+            self.log_message.emit(f"[WARNING] Could not find loudnorm JSON data in FFmpeg output. Full output:\n{output_str}", 'app')
             raise ValueError("Could not find loudnorm JSON data in FFmpeg output.")
             
         stats = json.loads(json_match.group(1))

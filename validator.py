@@ -7,6 +7,7 @@ import platform
 import re
 import subprocess
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -769,9 +770,19 @@ class ProjectValidator:
 
     def _get_file_hash(self, file_path: Path) -> str:
         path_str = str(file_path.resolve())
-        if path_str in self.file_hash_cache:
-            return self.file_hash_cache[path_str]
         
+        try:
+            mtime = os.path.getmtime(file_path)
+            size = os.path.getsize(file_path)
+        except OSError as e:
+            self.log(f"[ERROR] Could not read metadata for {file_path.name}: {e}")
+            return ""
+
+        if path_str in self.file_hash_cache:
+            cached_data = self.file_hash_cache[path_str]
+            if cached_data.get('mtime') == mtime and cached_data.get('size') == size:
+                return cached_data.get('hash', '')
+
         sha256_hash = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
@@ -780,7 +791,11 @@ class ProjectValidator:
                     sha256_hash.update(byte_block)
             
             file_hash = sha256_hash.hexdigest()
-            self.file_hash_cache[path_str] = file_hash
+            self.file_hash_cache[path_str] = {
+                'hash': file_hash,
+                'mtime': mtime,
+                'size': size
+            }
             return file_hash
         except (IOError, OSError) as e:
             self.log(f"[ERROR] Could not calculate hash for {file_path.name}: {e}")
