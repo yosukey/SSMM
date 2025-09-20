@@ -949,14 +949,24 @@ class VideoProcessor(QObject):
     
     def _get_media_duration(self, media_path: Path) -> float:
         try:
-            command = [str(get_ffprobe_path()), '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', str(media_path)]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=config.SUBPROCESS_CREATION_FLAGS)
-            if result.returncode != 0:
-                self.log_message.emit(f"ffprobe error getting duration: {result.stderr}", 'app')
-                return 0.0
-            return float(result.stdout.strip())
+            command = [
+                str(get_ffprobe_path()),
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(media_path)
+            ]
+
+            output = self._run_subprocess(
+                command,
+                capture_output=True,
+                timeout_sec=config.FFPROBE_TIMEOUT_S
+            )
+            
+            return float(output.strip())
+
         except Exception as e:
-            self.log_message.emit(f"Error in get_media_duration: {e}", 'app')
+            self.log_message.emit(f"Could not get media duration for '{media_path.name}': {e}", 'app')
             return 0.0
             
     def _resolve_codec_option(self, codec, hw):
