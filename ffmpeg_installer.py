@@ -4,6 +4,7 @@ import platform
 import subprocess
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
+import config
 
 class FFmpegInstaller(QThread):
     log_message = Signal(str)
@@ -79,19 +80,20 @@ class FFmpegInstaller(QThread):
 
     def _run_command(self, command):
         process = subprocess.Popen(
-            command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.STDOUT, 
-            text=True, 
-            encoding='utf-8', 
-            errors='replace'
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            creationflags=config.SUBPROCESS_CREATION_FLAGS
         )
-        
+
         if process.stdout:
             for line in iter(process.stdout.readline, ''):
                 if line:
                     self.log_message.emit(line.strip())
-        
+
         process.wait()
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command, self.tr("Process exited with a non-zero status."))

@@ -16,26 +16,15 @@ This application assumes that you will use only materials for which you hold the
 
 You are solely responsible for all rights clearances and required notices when publishing or distributing videos created with this app (including credits, source attributions, license notices, and compliance with quotation/fair-use requirements, as applicable). The app provider does not review your materials or workflows and accepts no liability for any resulting loss or damage. If needed, consult a qualified professional. This is not legal advice.
 
-Note: The app itself is licensed under CC BY-NC 4.0. That license applies to the app only; it does not grant or guarantee any rights in your input materials or your exported videos.
-
 --------------------------------------------------
-**2. License - Creative Commons BY-NC 4.0**
---------------------------------------------------
-This software is licensed under the Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) license.
-
-You are free to:
-- Share — copy and redistribute the material in any medium or format
-- Adapt — remix, transform, and build upon the material
-
-Under the following terms:
-- Attribution — You must give appropriate credit, provide a link to the license, and indicate if changes were made.
-- NonCommercial — You may not use the material for commercial purposes.
-
-For commercial use, please contact the author to arrange a separate license.
-
-Full license text: https://creativecommons.org/licenses/by-nc/4.0/
-
---------------------------------------------------
-**3. Copyright**
+**2. Copyright**
 --------------------------------------------------
 Copyright (c) 2025-- Yosuke Yamazaki
+
+--------------------------------------------------
+**3. License - MIT **
+--------------------------------------------------
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
