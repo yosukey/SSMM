@@ -23,7 +23,7 @@ import qdarktheme
 from main_window import MainWindow, EmittingStream
 from utils import resolve_resource_path
 
-MIN_PYTHON_VERSION = (3, 9)
+MIN_PYTHON_VERSION = (3, 10)
 
 def check_python_version():
     if sys.version_info < MIN_PYTHON_VERSION:

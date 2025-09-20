@@ -223,12 +223,10 @@ class VideoProcessor(QObject):
                     # --- Attempt 2: Fallback to safer re-encoding ---
                     self.log_message.emit(f"[WARNING] Fast concatenation failed. Retrying with full re-encode... Reason: {e}", 'app')
                     
-                    # Get standard encoding options from the project model
-                    video_opts = self._get_video_encoding_options(project_model.parameters, pass_num=1)
+                    video_opts = self._get_video_encoding_options(project_model.parameters, pass_num=1, is_single_pass_override=True)
                     audio_opts = self._get_common_audio_options(project_model.parameters)
                     fps = project_model.parameters.fps
                     
-                    # Build the re-encoding command
                     builder_recode = self._create_ffmpeg_builder()
                     concat_command_recode = (builder_recode
                         .add_input(concat_list_path, ['-f', 'concat', '-safe', '0'])
@@ -239,7 +237,6 @@ class VideoProcessor(QObject):
                         )
                         .build())
                     
-                    # This will raise an exception if it also fails, which is the correct behavior
                     self._run_subprocess(concat_command_recode)
                     self.log_message.emit("Re-encode concatenation successful.", 'app')
 
@@ -367,7 +364,7 @@ class VideoProcessor(QObject):
             prev_ext, next_ext = self._create_extended_videos_from_frames(model, prev_frame_path, next_frame_path, interval_duration, codec, temp_dir, index_suffix)
             filter_complex = f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={interval_duration}:offset=0[v];[0:a][1:a]acrossfade=d={interval_duration}:curve1=tri:curve2=tri[a]"
             
-            video_opts = self._get_video_encoding_options(model.parameters, pass_num=1)
+            video_opts = self._get_video_encoding_options(model.parameters, pass_num=1, is_single_pass_override=True)
             audio_opts = self._get_common_audio_options(model.parameters)
             outputs = ['-map', '[v]', '-map', '[a]', '-c:v', codec] + video_opts + audio_opts + ['-r', str(model.parameters.fps)]
 
@@ -391,7 +388,7 @@ class VideoProcessor(QObject):
         prev_ext = temp_dir / f'prev_extended_preview_{index_suffix}.mp4'
         next_ext = temp_dir / f'next_extended_preview_{index_suffix}.mp4'
         
-        video_opts = self._get_video_encoding_options(params, pass_num=1)
+        video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
         
         for frame_path, video_path in [(prev_frame, prev_ext), (next_frame, next_ext)]:
@@ -877,7 +874,7 @@ class VideoProcessor(QObject):
         
         filter_complex = f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={duration}:offset=0[v];[0:a][1:a]acrossfade=d={duration}:curve1=tri:curve2=tri[a]"
         
-        video_opts = self._get_video_encoding_options(model.parameters, pass_num=1)
+        video_opts = self._get_video_encoding_options(model.parameters, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(model.parameters)
         outputs = ['-map', '[v]', '-map', '[a]', '-c:v', codec] + video_opts + audio_opts + ['-r', str(model.parameters.fps)]
         
@@ -929,7 +926,7 @@ class VideoProcessor(QObject):
         
         prev_ext = temp_dir / f'prev_extended_{index}.mp4'
         next_ext = temp_dir / f'next_extended_{index}.mp4'
-        video_opts = self._get_video_encoding_options(params, pass_num=1)
+        video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
         
         for frame, video in [(prev_frame, prev_ext), (next_frame, next_ext)]:
@@ -977,7 +974,7 @@ class VideoProcessor(QObject):
     def _get_common_audio_options(self, params: "ProjectParameters"):
         return ['-c:a', 'aac', '-b:a', params.audio_bitrate, '-ar', params.audio_sample_rate, '-ac', str(params.audio_channels)]
     
-    def _get_video_encoding_options(self, params: "ProjectParameters", pass_num: int = 1):
+    def _get_video_encoding_options(self, params: "ProjectParameters", pass_num: int = 1, is_single_pass_override: bool = False):
         mode = params.encoding_mode
         value = params.encoding_value
         codec = self._resolve_codec_option(params.codec, params.hardware_encoding)
@@ -1036,7 +1033,7 @@ class VideoProcessor(QObject):
                 options.extend(['-maxrate', f'{maxrate}k', '-bufsize', f'{bufsize}k'])
         
         is_2pass_supported = 'videotoolbox' not in codec
-        if params.encoding_pass == config.ENCODING_PASSES["TWO_PASS"] and mode != config.ENCODING_MODES["QUALITY"] and is_2pass_supported:
+        if not is_single_pass_override and params.encoding_pass == config.ENCODING_PASSES["TWO_PASS"] and mode != config.ENCODING_MODES["QUALITY"] and is_2pass_supported:
             options.extend(['-pass', str(pass_num)])
 
         return options

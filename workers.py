@@ -76,6 +76,10 @@ class ValidationWorker(QObject):
         self.model = model
         self.encoders_map = encoders_map
 
+    def cancel(self):
+        self.log_message.emit("Validation cancellation requested.", "app")
+        self.validator.cancel()
+
     def run(self):
         try:
             def worker_logger(text, source='app'):
