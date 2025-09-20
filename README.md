@@ -1,6 +1,6 @@
 # Simple Slideshow Movie Maker (SSMM)
 
-![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC_BY--NC_4.0-lightgrey.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 Turn a PDF into a clean, narrated slideshow movie with optional picture-in-picture (PinP) video overlays — no timeline editing required.  
 Designed for on-demand seminar, tutorial, and classroom content.
@@ -232,13 +232,7 @@ This work represents an outcome of the research project supported by JSPS KAKENH
 
 ## 📄 License
 
-### CC BY-NC
-
-**Creative Commons Attribution‑NonCommercial 4.0 International (CC BY‑NC 4.0).**
-
-You may remix, adapt, and build upon this project **non‑commercially**, as long as you credit the author. For commercial use, please contact the author to arrange a separate license.
-
-https://creativecommons.org/licenses/by-nc/4.0/
+This project is licensed under the MIT License.
 
 **Copyright** (c) 2025-- Yosuke Yamazaki
 
