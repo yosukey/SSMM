@@ -253,8 +253,6 @@ This application assumes that you will use only materials for which you hold the
 
 You are solely responsible for all rights clearances and required notices when publishing or distributing videos created with this app (including credits, source attributions, license notices, and compliance with quotation/fair-use requirements, as applicable). The app provider does not review your materials or workflows and accepts no liability for any resulting loss or damage. If needed, consult a qualified professional. This is not legal advice.
 
-Note: The app itself is licensed under CC BY-NC 4.0. That license applies to the app only; it does not grant or guarantee any rights in your input materials or your exported videos.
-
 ### Font License
 
 This application bundles Noto Sans by Google and Adobe. It is available under the SIL Open Font License (OFL), a free and open source license. You can find the full text of the license in the "Licenses" tab within the application.

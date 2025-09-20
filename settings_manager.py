@@ -57,7 +57,7 @@ class SettingsManager:
              raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
 
         project_dir = Path(project_path_str)
-        pdf_files = list(project_dir.glob('*.pdf'))
+        pdf_files = list(project_dir.glob('*.[pP][dD][fF]'))
         if not pdf_files:
             raise FileNotFoundError(f"No PDF file found in the project folder '{project_dir}'.")
         if len(pdf_files) > 1:

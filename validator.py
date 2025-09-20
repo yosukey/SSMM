@@ -398,7 +398,7 @@ class ProjectValidator:
         self.log("[INFO] --- Phase 2/4: Analyzing PDF file ---")
 
         page_count = 0
-        pdf_path = next(project_model.project_folder.glob('*.pdf'), None) if project_model.project_folder else None
+        pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None) if project_model.project_folder else None
 
         if not pdf_path:
             msg = (
@@ -1057,11 +1057,14 @@ class ProjectValidator:
                         if stream_tags and 'rotate' in stream_tags:
                             rotation = str(stream_tags.get('rotate'))
 
+                    bitrate_str = stream.get('bit_rate')
+                    video_bitrate = int(bitrate_str) // 1000 if bitrate_str and bitrate_str.isdigit() else 0
+
                     video_info = {
                         'width': int(stream.get('width', 0)),
                         'height': int(stream.get('height', 0)),
                         'fps': round(avg_fps, 2),
-                        'bitrate': int(stream.get('bit_rate', 0)) // 1000,
+                        'bitrate': video_bitrate,
                         'codec': stream.get('codec_name', ''),
                         'dar': stream.get('display_aspect_ratio'),
                         'is_vfr': is_vfr,
