@@ -62,6 +62,7 @@ class ProjectSetupWorker(QObject):
             self.error.emit(title, message)
         finally:
             self.validator.log = original_logger
+            self.settings_manager.log_message.disconnect(self.log_message)
 
 class ValidationWorker(QObject):
     log_message = Signal(str, str)
