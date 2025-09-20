@@ -65,7 +65,7 @@ Please be aware of the following limitations regarding these applications:
 
 ### Running with Python 🐍
 
-1. **Install Python 3.9+** (3.9 or newer). See Python 3.12+ note below.
+1. **Install Python 3.10+** (3.10 or newer). See Python 3.12+ note below.
 2. **Clone this repository**, then install deps:
    ```terminal
    pip install -r requirements.txt
