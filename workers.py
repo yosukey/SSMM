@@ -13,7 +13,7 @@ class EncoderTestWorker(QObject):
         self.validator = validator
 
     def run(self):
-        encoders_map, logs = self.validator.get_functional_hw_encoders()
+        encoders_map, logs = self.validator.get_functional_encoders()
         self.finished.emit(encoders_map, logs)
 
 class ProjectSetupWorker(QObject):
