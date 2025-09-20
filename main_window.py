@@ -1,4 +1,5 @@
 # main_window.py
+import copy
 import datetime
 import json
 import platform
@@ -1584,7 +1585,15 @@ class MainWindow(QWidget):
         old_slides = self.project_model.slides
         old_hashes = [s.p_hash for s in old_slides if s.p_hash]
 
-        pdf_path = self._find_single_pdf(self.project_model.project_folder)
+        try:
+            pdf_path = self._find_single_pdf(self.project_model.project_folder)
+        except (FileNotFoundError, ValueError) as e:
+            QMessageBox.critical(self, self.tr("PDF Error"), str(e))
+            self.write_debug(f"[ERROR] PDF check failed: {e}")
+            self._clear_project()
+            self.state_machine.transition_to(AppState.AWAITING_PROJECT)
+            return False
+
         if not pdf_path:
             return True
 
@@ -1653,7 +1662,7 @@ class MainWindow(QWidget):
 
         for new_idx, old_idx in mapping.items():
             if old_idx is not None and 0 <= old_idx < len(old_slides):
-                migrated_slides[new_idx] = old_slides[old_idx]
+                migrated_slides[new_idx] = copy.deepcopy(old_slides[old_idx])
 
         for i in range(new_page_count):
             migrated_slides[i].p_hash = new_pdf_details["p_hashes"][i]
