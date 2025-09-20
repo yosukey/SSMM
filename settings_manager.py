@@ -2,7 +2,7 @@
 import toml
 from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import QStandardPaths, QObject, Signal
 import fitz
 import hashlib
 from dataclasses import asdict
@@ -10,8 +10,11 @@ from dataclasses import asdict
 from models import ProjectModel, ProjectParameters, Slide
 import config
 
-class SettingsManager:
+class SettingsManager(QObject):
+    log_message = Signal(str, str)
+
     def __init__(self, main_window):
+        super().__init__()
         self.main_window = main_window
 
     def prompt_for_load_path(self) -> Path | None:
@@ -39,7 +42,7 @@ class SettingsManager:
         return None
 
     def _load_from_file(self, file_path: Path) -> ProjectModel | None:
-        self.main_window.write_debug(f"[INFO] Attempting to load project settings from: {file_path}")
+        self.log_message.emit(f"[INFO] Attempting to load project settings from: {file_path}", 'app')
         with open(file_path, 'r', encoding='utf-8') as f:
             data = toml.load(f)
 
@@ -47,7 +50,7 @@ class SettingsManager:
         cached_pdf_hash = validation_info.get("pdf_file_hash")
         if cached_pdf_hash:
             self.main_window.validator.validated_pdf_hash = cached_pdf_hash
-            self.main_window.write_debug(f"[INFO] Loaded cached PDF hash: {cached_pdf_hash[:10]}...")
+            self.log_message.emit(f"[INFO] Loaded cached PDF hash: {cached_pdf_hash[:10]}...", 'app')
 
         loaded_params_dict = data.get("parameters", {})
 
@@ -74,7 +77,7 @@ class SettingsManager:
             raise ValueError(f"Failed to read the PDF file '{pdf_path.name}': {e}")
 
         if toml_slide_count != pdf_page_count:
-            self.main_window.write_debug(f"[WARNING] Page count in TOML ({toml_slide_count}) differs from PDF ({pdf_page_count}). Migration will be required.")
+            self.log_message.emit(f"[WARNING] Page count in TOML ({toml_slide_count}) differs from PDF ({pdf_page_count}). Migration will be required.", 'app')
 
         project_model = ProjectModel()
         project_model.project_folder = project_dir
@@ -124,7 +127,7 @@ class SettingsManager:
                 slide.video_scale = slide_settings.get("video_scale", config.DEFAULT_VIDEO_SCALE)
                 slide.video_effects = slide_settings.get("video_effects", [])
 
-        self.main_window.write_debug(f"[INFO] Successfully loaded project settings.")
+        self.log_message.emit(f"[INFO] Successfully loaded project settings.", 'app')
         return project_model
 
     def save_project_settings(self, project_model: ProjectModel):

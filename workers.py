@@ -30,6 +30,8 @@ class ProjectSetupWorker(QObject):
     def run(self):
         original_logger = self.validator.log
         try:
+            self.settings_manager.log_message.connect(self.log_message)
+
             def worker_logger(text, source='app'):
                 self.log_message.emit(text, source)
 
