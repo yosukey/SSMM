@@ -98,6 +98,7 @@ class WorkerManager(QObject):
             signals_to_slots={
                 'finished': self.project_setup_finished,
                 'error': self.project_setup_error,
+                'log_message': self.log_message,
             }
         )
 

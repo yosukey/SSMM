@@ -19,6 +19,7 @@ class EncoderTestWorker(QObject):
 class ProjectSetupWorker(QObject):
     finished = Signal(ProjectModel)
     error = Signal(str, str)
+    log_message = Signal(str, str)
 
     def __init__(self, settings_manager: SettingsManager, validator: ProjectValidator, path: Path, parent=None):
         super().__init__(parent)
@@ -27,10 +28,12 @@ class ProjectSetupWorker(QObject):
         self.path = path
 
     def run(self):
+        original_logger = self.validator.log
         try:
-            original_logger = self.validator.log
-            main_window = self.settings_manager.main_window
-            self.validator.log = lambda text, source='app': main_window.write_debug(text, source)
+            def worker_logger(text, source='app'):
+                self.log_message.emit(text, source)
+
+            self.validator.log = worker_logger
             project_model = None
 
             if self.path.is_file() and self.path.suffix == '.toml':
@@ -41,21 +44,22 @@ class ProjectSetupWorker(QObject):
                          self.validator.compute_and_populate_pdf_details(project_model)
             elif self.path.is_dir():
                 project_model = ProjectModel(project_folder=self.path)
+                main_window = self.settings_manager.main_window
                 main_window.initialize_project_from_pdf(project_model)
                 main_window._automap_materials(project_model)
                 self.validator.probe_and_cache_all_materials(project_model)
                 self.validator.compute_and_populate_pdf_details(project_model)
             else:
                 raise ValueError("Invalid path provided to ProjectSetupWorker.")
-            
-            self.validator.log = original_logger
+
             self.finished.emit(project_model)
 
         except Exception as e:
-            self.validator.log = original_logger if 'original_logger' in locals() else self.validator.log
             title = e.__class__.__name__
             message = f"An error occurred during project setup: {e}"
             self.error.emit(title, message)
+        finally:
+            self.validator.log = original_logger
 
 class ValidationWorker(QObject):
     log_message = Signal(str, str)

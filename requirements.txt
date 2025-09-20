@@ -1,6 +1,6 @@
 PySide6
 pymupdf
-pillow
+pillow>=9.2.0
 toml
 pyqtdarktheme>=2.1.0
 psutil
