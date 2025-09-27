@@ -9,7 +9,7 @@ import subprocess
 import sys
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import fitz
 import imagehash
@@ -125,18 +125,17 @@ class ProjectValidator:
 
     def _get_pdf_structure(self, pdf_path: Path) -> dict:
         structure = {'page_count': 0, 'page_dims': []}
-        doc = None
         try:
-            doc = fitz.open(pdf_path)
-            structure['page_count'] = doc.page_count
-            for page in doc:
-                if self.is_canceled():
-                    return {}
-                structure['page_dims'].append((page.rect.width, page.rect.height))
-            return structure
-        finally:
-            if doc:
-                doc.close()
+            with fitz.open(pdf_path) as doc:
+                structure['page_count'] = doc.page_count
+                for page in doc:
+                    if self.is_canceled():
+                        return {}
+                    structure['page_dims'].append((page.rect.width, page.rect.height))
+                return structure
+        except Exception as e:
+            self.log(f"[ERROR] Failed to get PDF structure for {pdf_path.name}: {e}")
+            return {}
 
     def cache_pdf_structure(self, pdf_path: Path):
         try:
@@ -193,9 +192,9 @@ class ProjectValidator:
             if doc:
                 doc.close()
 
-    def get_pdf_details(self, pdf_path: Path) -> Optional[dict]:
+    def get_pdf_details(self, pdf_path: Path) -> Tuple[Optional[dict], Optional[str]]:
         if not pdf_path or not pdf_path.exists():
-            return None
+            return None, f"PDF file not found at path: {pdf_path}"
 
         details = {
             "page_count": 0,
@@ -212,24 +211,25 @@ class ProjectValidator:
                 matrix = fitz.Matrix(zoom_factor, zoom_factor)
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
                 pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                
+
                 p_hash = imagehash.phash(pil_image)
                 details["p_hashes"].append(str(p_hash))
-                
+
                 target_thumb_height = 300
                 thumbnail_size = (int(target_thumb_height * pix.width / pix.height), target_thumb_height)
                 thumbnail_image = pil_image.copy()
                 thumbnail_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
-                
+
                 buffer = io.BytesIO()
                 thumbnail_image.save(buffer, format="PNG")
                 b64_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
                 details["thumbnails_b64"].append(b64_string)
-                
-            return details
+
+            return details, None
         except Exception as e:
-            self.log(f"[ERROR] Could not get details for PDF {pdf_path.name}: {e}")
-            return None
+            error_msg = f"Could not get details for PDF {pdf_path.name}: {e}"
+            self.log(f"[ERROR] {error_msg}")
+            return None, error_msg
         finally:
             if doc:
                 doc.close()
