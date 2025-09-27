@@ -1005,7 +1005,7 @@ class ProjectValidator:
             )
             messages.add_project_notice(msg)
 
-    def _get_media_info(self, media_path: Path):
+def _get_media_info(self, media_path: Path):
         try:
             cmd = [
                 str(get_ffprobe_path()),
@@ -1083,8 +1083,12 @@ class ProjectValidator:
                         if stream_tags and 'rotate' in stream_tags:
                             rotation = str(stream_tags.get('rotate'))
 
-                    bitrate_str = stream.get('bit_rate')
-                    video_bitrate = int(bitrate_str) // 1000 if bitrate_str and bitrate_str.isdigit() else 0
+                    bitrate_str = stream.get('bit_rate', '0')
+                    video_bitrate = 0
+                    try:
+                        video_bitrate = int(float(bitrate_str) / 1000)
+                    except (ValueError, TypeError):
+                        pass
 
                     video_info = {
                         'width': int(stream.get('width', 0)),
@@ -1113,10 +1117,11 @@ class ProjectValidator:
                          bitrate_val = 'Lossless (ALAC)'
                     else:
                         stream_bitrate_str = stream.get('bit_rate')
-                        if stream_bitrate_str and stream_bitrate_str.isdigit():
-                            bitrate_val = int(stream_bitrate_str) // 1000
-                        elif overall_bitrate_bps_str and overall_bitrate_bps_str.isdigit():
-                             bitrate_val = int(overall_bitrate_bps_str) // 1000
+                        bitrate_to_parse = stream_bitrate_str or overall_bitrate_bps_str or '0'
+                        try:
+                            bitrate_val = int(float(bitrate_to_parse) / 1000)
+                        except (ValueError, TypeError):
+                            bitrate_val = 0
                     
                     audio_streams.append({
                         'index': int(stream.get('index')),

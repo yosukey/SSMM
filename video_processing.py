@@ -541,6 +541,9 @@ class VideoProcessor(QObject):
         return out_path
 
     def _render_pdf_pages(self, project_model: ProjectModel, temp_folder: Path) -> dict[int, Path]:
+        if not project_model.project_folder or not project_model.project_folder.is_dir():
+            raise ValueError("Project folder is not set or is not a valid directory.")
+
         pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None)
         if not pdf_path:
             raise FileNotFoundError("Could not find a PDF file in the project folder.")
