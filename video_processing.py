@@ -9,8 +9,9 @@ from PIL import Image, ImageDraw, ImageFont
 import re
 import json
 import shutil
+import shlex
 
-from PySide6.QtCore import QObject, Signal, Slot, QProcess, QEventLoop, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, QProcess
 import fitz
 
 from models import ProjectModel, Slide, ProjectParameters
@@ -31,7 +32,7 @@ class VideoProcessor(QObject):
     def __init__(self):
         super().__init__()
         self._is_canceled = False
-        self.active_processes = []
+        self.active_processes = set()
         self.process_lock = threading.Lock()
         self.watermark_path: Path | None = None
         self._current_step = 0
@@ -47,7 +48,9 @@ class VideoProcessor(QObject):
 
         for process in procs_to_kill:
             try:
-                process.kill()
+                if process.state() != QProcess.NotRunning:
+                    process.kill()
+                    process.waitForFinished(5000)
             except Exception:
                 pass
             
@@ -62,6 +65,69 @@ class VideoProcessor(QObject):
         self._is_verbose = is_verbose
         success, message = self.run_preview_creation(project_model, slide_index, pdf_path, include_intervals)
         self.preview_finished.emit(success, message)
+        
+    def register_process(self, process: QProcess):
+        with self.process_lock:
+            self.active_processes.add(process)
+
+    def unregister_process(self, process: QProcess):
+        with self.process_lock:
+            self.active_processes.discard(process)
+
+    def _run_subprocess(self, command_list: list[str], capture_output=False, timeout_sec=None):
+        if self._is_canceled:
+            raise ProcessingCanceled("Operation was canceled before starting the process.")
+
+        self.log_message.emit(f"Running command: {' '.join(shlex.quote(str(arg)) for arg in command_list)}", 'app')
+
+        process = QProcess()
+        self.register_process(process)
+
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        
+        output_chunks = []
+        
+        def handle_output():
+            data = process.readAll().data().decode('utf-8', errors='replace')
+            if data:
+                output_chunks.append(data)
+                if not capture_output:
+                    self.log_message.emit(data.strip(), "ffmpeg")
+        
+        process.readyRead.connect(handle_output)
+
+        try:
+            process.start(command_list[0], command_list[1:])
+
+            if not process.waitForStarted(config.PROCESS_START_TIMEOUT_MS):
+                raise RuntimeError("Process failed to start.")
+
+            timeout_ms = (timeout_sec * 1000) if timeout_sec is not None else config.FFMPEG_ENCODE_TIMEOUT_MS
+            finished_normally = process.waitForFinished(timeout_ms)
+
+            handle_output()
+            combined_output = "".join(output_chunks)
+
+            if not finished_normally:
+                if process.state() != QProcess.NotRunning:
+                    process.kill()
+                    process.waitForFinished(5000)
+                raise TimeoutError(f"Process timed out after {timeout_ms / 1000} seconds.")
+
+            if self._is_canceled:
+                raise ProcessingCanceled()
+
+            exit_code = process.exitCode()
+            exit_status = process.exitStatus()
+            
+            if exit_code != 0 or exit_status != QProcess.NormalExit:
+                error_string = process.errorString()
+                raise Exception(f"Command exited with status {exit_code} and error '{error_string}'.\nOutput:\n{combined_output}")
+
+            return combined_output
+
+        finally:
+            self.unregister_process(process)
 
     def _create_ffmpeg_builder(self) -> FFmpegCommandBuilder:
         builder = FFmpegCommandBuilder()

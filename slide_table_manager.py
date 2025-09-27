@@ -75,6 +75,7 @@ class SlideTableManager(QObject):
         self.thumbnail_cache.clear()
         for timer in self.timers.values():
             timer.stop()
+            timer.deleteLater()
         self.timers.clear()
 
     def toggle_previews(self, enabled: bool):
