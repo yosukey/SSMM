@@ -39,9 +39,12 @@ class SlideProcessorFactory:
             return UnassignedSlideProcessor(video_processor, slide_info, output_path)
         elif slide.filename == config.SILENT_MATERIAL_NAME:
             return SilentSlideProcessor(video_processor, slide_info, output_path)
-        elif slide.filename.lower().endswith(config.SUPPORTED_AUDIO_FORMATS):
+        
+        filename_lower = slide.filename.lower()
+        
+        if filename_lower.endswith(config.SUPPORTED_AUDIO_FORMATS):
             return AudioSlideProcessor(video_processor, slide_info, output_path)
-        elif slide.is_video:
+        elif slide.is_video or filename_lower.endswith(config.SUPPORTED_VIDEO_FORMATS):
             return VideoSlideProcessor(video_processor, slide_info, output_path)
         else:
             raise ValueError(f"Unknown slide type for material: {slide.filename}")
