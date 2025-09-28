@@ -165,11 +165,16 @@ class SettingsManager(QObject):
 
     def _perform_save(self, file_path: Path, project_model: ProjectModel):
         paths_data = {}
-        if project_model.project_folder and file_path.parent == project_model.project_folder:
-            paths_data['project_folder_is_self'] = True
+        
+        if project_model.project_folder:
+            if file_path.parent == project_model.project_folder:
+                paths_data['project_folder_is_self'] = True
+            else:
+                paths_data['project_folder_is_self'] = False
+                paths_data['project_folder'] = str(project_model.project_folder)
         else:
             paths_data['project_folder_is_self'] = False
-            paths_data['project_folder'] = str(project_model.project_folder)
+            
         paths_data['output_folder'] = str(project_model.output_folder) if project_model.output_folder else ""
 
         slides_data = []
