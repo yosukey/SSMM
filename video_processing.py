@@ -108,14 +108,14 @@ class VideoProcessor(QObject):
             handle_output()
             combined_output = "".join(output_chunks)
 
+            if self._is_canceled:
+                raise ProcessingCanceled()
+
             if not finished_normally:
                 if process.state() != QProcess.NotRunning:
                     process.kill()
                     process.waitForFinished(5000)
                 raise TimeoutError(f"Process timed out after {timeout_ms / 1000} seconds.")
-
-            if self._is_canceled:
-                raise ProcessingCanceled()
 
             exit_code = process.exitCode()
             exit_status = process.exitStatus()
