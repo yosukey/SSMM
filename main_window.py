@@ -1011,13 +1011,16 @@ class MainWindow(QWidget):
                 self.write_debug(f"Error while rescanning material files: {e}")
 
     def check_for_updates(self):
+        if self.__version__ == 'local-dev':
+            self.write_debug("[INFO] Skipping update check for local development version.", 'app')
+            return
+
         self.write_debug("[INFO] --- Checking for application updates ---", 'app')
         repo_url = config.REPO_URL
         repo_path = repo_url.replace("https://github.com/", "")
         api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
 
         try:
-            # 'packaging' library is required for accurate version comparison.
             from packaging.version import parse as parse_version
         except ImportError:
             self.write_debug("[WARNING] 'packaging' library not found. Skipping update check. Please run 'pip install packaging'.", 'app')
