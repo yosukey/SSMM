@@ -59,9 +59,11 @@ class Ui_MainWindow(object):
         MainWindow.codec_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         MainWindow.basic_layout.addRow(MainWindow.codec_label, MainWindow.codec_combo)
         MainWindow.hardware_encoding_label = QLabel(MainWindow.tr("Hardware Encoding:"))
+        
         MainWindow.hardware_encoding_combo = QComboBox()
         MainWindow.hardware_encoding_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         MainWindow.basic_layout.addRow(MainWindow.hardware_encoding_label, MainWindow.hardware_encoding_combo)
+        
         MainWindow.basic_tab.setLayout(MainWindow.basic_layout)
         MainWindow.parameters_tabs.addTab(MainWindow.basic_tab, MainWindow.tr("Basic"))
         
