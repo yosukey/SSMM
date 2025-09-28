@@ -823,7 +823,7 @@ class MainWindow(QWidget):
         self.slide_table_manager.toggle_previews(is_checked)
         
     def update_encoding_options(self):
-        selected_hw_encoder = self.ui.hardware_encoding_combobox.currentData()
+        selected_hw_encoder = self.hardware_encoding_combo.currentData()
 
         is_quality_mode_supported = True
         is_2pass_supported = True
@@ -831,40 +831,40 @@ class MainWindow(QWidget):
         if selected_hw_encoder == "videotoolbox":
             is_quality_mode_supported = False
             is_2pass_supported = False
-            self.ui.encoding_mode_combobox.setToolTip("Quality (CRF/CQP) mode is not compatible with Apple's VideoToolbox.")
-            self.ui.encoding_pass_combobox.setToolTip("2-Pass encoding is not compatible with Apple's VideoToolbox.")
+            self.encoding_mode_combo.setToolTip("Quality (CRF/CQP) mode is not compatible with Apple's VideoToolbox.")
+            self.pass_combo.setToolTip("2-Pass encoding is not compatible with Apple's VideoToolbox.")
         else:
-            self.ui.encoding_mode_combobox.setToolTip("")
-            self.ui.encoding_pass_combobox.setToolTip("")
+            self.encoding_mode_combo.setToolTip("")
+            self.pass_combo.setToolTip("")
         
-        self.ui.encoding_mode_combobox.blockSignals(True)
-        self.ui.encoding_pass_combobox.blockSignals(True)
+        self.encoding_mode_combo.blockSignals(True)
+        self.pass_combo.blockSignals(True)
 
-        current_mode = self.ui.encoding_mode_combobox.currentText()
-        self.ui.encoding_mode_combobox.clear()
+        current_mode = self.encoding_mode_combo.currentText()
+        self.encoding_mode_combo.clear()
         for mode in config.ENCODING_MODES.values():
             if mode == config.ENCODING_MODES["QUALITY"] and not is_quality_mode_supported:
                 continue
-            self.ui.encoding_mode_combobox.addItem(mode)
+            self.encoding_mode_combo.addItem(mode)
         
-        if current_mode in [self.ui.encoding_mode_combobox.itemText(i) for i in range(self.ui.encoding_mode_combobox.count())]:
-            self.ui.encoding_mode_combobox.setCurrentText(current_mode)
+        if current_mode in [self.encoding_mode_combo.itemText(i) for i in range(self.encoding_mode_combo.count())]:
+            self.encoding_mode_combo.setCurrentText(current_mode)
         elif not is_quality_mode_supported:
-             self.ui.encoding_mode_combobox.setCurrentText(config.ENCODING_MODES["VBR"])
+             self.encoding_mode_combo.setCurrentText(config.ENCODING_MODES["VBR"])
 
-        current_pass = self.ui.encoding_pass_combobox.currentText()
-        self.ui.encoding_pass_combobox.clear()
+        current_pass = self.pass_combo.currentText()
+        self.pass_combo.clear()
         for pass_option in config.ENCODING_PASSES.values():
             if pass_option == config.ENCODING_PASSES["TWO_PASS"]:
-                if self.ui.encoding_mode_combobox.currentText() == config.ENCODING_MODES["QUALITY"] or not is_2pass_supported:
+                if self.encoding_mode_combo.currentText() == config.ENCODING_MODES["QUALITY"] or not is_2pass_supported:
                     continue
-            self.ui.encoding_pass_combobox.addItem(pass_option)
+            self.pass_combo.addItem(pass_option)
 
-        if current_pass in [self.ui.encoding_pass_combobox.itemText(i) for i in range(self.ui.encoding_pass_combobox.count())]:
-             self.ui.encoding_pass_combobox.setCurrentText(current_pass)
+        if current_pass in [self.pass_combo.itemText(i) for i in range(self.pass_combo.count())]:
+             self.pass_combo.setCurrentText(current_pass)
 
-        self.ui.encoding_mode_combobox.blockSignals(False)
-        self.ui.encoding_pass_combobox.blockSignals(False)
+        self.encoding_mode_combo.blockSignals(False)
+        self.pass_combo.blockSignals(False)
 
     def prompt_install_ffmpeg(self):
         reply = QMessageBox.question(self, self.tr('Install FFmpeg'), self.tr("This application requires FFmpeg to create videos.\n\nThis tool will attempt to install it using a system package manager (winget for Windows, Homebrew for macOS).\n\nNote:\n• The process may take several minutes.\n• Administrator privileges (password) may be required.\n\nDo you want to proceed with the installation?"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
