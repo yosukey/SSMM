@@ -330,67 +330,6 @@ class VideoProcessor(QObject):
         finally:
             self.watermark_path = None
 
-    def _run_subprocess(self, command, capture_output=False, timeout_sec=None):
-        if self._is_canceled:
-            raise ProcessingCanceled()
-
-        self.log_message.emit(f"Running command: {' '.join(map(str, command))}", 'app')
-        
-        process = QProcess()
-        process.setProcessChannelMode(QProcess.MergedChannels)
-
-        if not capture_output:
-            process.readyReadStandardOutput.connect(
-                lambda: self.log_message.emit(process.readAllStandardOutput().data().decode(errors='replace').strip(), 'ffmpeg')
-            )
-
-        with self.process_lock:
-            self.active_processes.append(process)
-
-        loop = QEventLoop()
-        process.finished.connect(loop.quit)
-        process.errorOccurred.connect(loop.quit)
-        
-        timer = None
-        if timeout_sec:
-            timer = QTimer()
-            timer.setSingleShot(True)
-            timer.timeout.connect(loop.quit)
-            timer.start(int(timeout_sec * 1000))
-
-        process.start(command[0], command[1:])
-        
-        if self._is_canceled:
-            process.kill()
-            raise ProcessingCanceled()
-
-        loop.exec()
-
-        timed_out = timer and not timer.isActive()
-
-        exit_code = process.exitCode()
-        
-        output_str = ""
-        output_str = process.readAllStandardOutput().data().decode(errors='replace')
-        
-        with self.process_lock:
-            if process in self.active_processes:
-                self.active_processes.remove(process)
-        
-        if self._is_canceled:
-             raise ProcessingCanceled()
-        
-        if timed_out:
-            process.kill()
-            raise TimeoutError(f"Process timed out after {timeout_sec} seconds.")
-
-        if exit_code != 0 or process.error() != QProcess.UnknownError:
-            error_string = process.errorString()
-            raise Exception(f"Command exited with status {exit_code} and error '{process.error()}': {error_string}\nOutput:\n{output_str}")
-
-        if capture_output:
-            return output_str
-
     def _generate_single_slide_video(self, slide_info: tuple, output_path: Path = None) -> tuple[int, Path]:
         if self._is_canceled:
             raise ProcessingCanceled()
@@ -1153,17 +1092,12 @@ class VideoProcessor(QObject):
         rgba_color = config.WATERMARK_COLOR_OPTIONS_RGBA.get(params.watermark_color, (255, 255, 255))
         fill_color = (*rgba_color, int(255 * (params.watermark_opacity / 100)))
 
-        try:
-            bbox = font.getbbox(params.watermark_text)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            text_offset_y = bbox[1]
-            stamp_canvas_size = (text_width, text_height)
-            text_draw_pos = (0, -text_offset_y)
-        except AttributeError:
-            size = font.getsize(params.watermark_text)
-            stamp_canvas_size = size
-            text_draw_pos = (0, 0)
+        bbox = font.getbbox(params.watermark_text)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        text_offset_y = bbox[1]
+        stamp_canvas_size = (text_width, text_height)
+        text_draw_pos = (0, -text_offset_y)
 
         stamp_img = Image.new('RGBA', stamp_canvas_size, (0,0,0,0))
         draw_stamp = ImageDraw.Draw(stamp_img)

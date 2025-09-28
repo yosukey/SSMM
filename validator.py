@@ -152,7 +152,7 @@ class ProjectValidator:
             self.log("[WARNING] No project folder set, cannot compute PDF details.")
             return
 
-        pdf_path = next(project_model.project_folder.glob('*.pdf'), None)
+        pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None)
         if not pdf_path:
             self.log("[WARNING] No PDF found, cannot compute page details.")
             return
