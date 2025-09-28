@@ -822,50 +822,49 @@ class MainWindow(QWidget):
     def _on_preview_toggled(self, is_checked: bool):
         self.slide_table_manager.toggle_previews(is_checked)
         
-    def update_encoding_options(self):
-        selected_hw_encoder = self.hardware_encoding_combo.currentData()
-
-        is_quality_mode_supported = True
-        is_2pass_supported = True
-
-        if selected_hw_encoder == "videotoolbox":
-            is_quality_mode_supported = False
-            is_2pass_supported = False
-            self.encoding_mode_combo.setToolTip("Quality (CRF/CQP) mode is not compatible with Apple's VideoToolbox.")
-            self.pass_combo.setToolTip("2-Pass encoding is not compatible with Apple's VideoToolbox.")
-        else:
-            self.encoding_mode_combo.setToolTip("")
-            self.pass_combo.setToolTip("")
+    def update_encoding_options(self, _=None):
+        mode = self.encoding_mode_combo.currentText()
+        selected_codec = self.codec_combo.currentText()
+        hw_encoder_name = self.hardware_encoding_combo.currentData()
         
-        self.encoding_mode_combo.blockSignals(True)
-        self.pass_combo.blockSignals(True)
+        hw_codec_name = config.CODEC_MAP.get(selected_codec, {}).get(hw_encoder_name)
+        is_videotoolbox = 'videotoolbox' in (hw_codec_name or '')
 
-        current_mode = self.encoding_mode_combo.currentText()
-        self.encoding_mode_combo.clear()
-        for mode in config.ENCODING_MODES.values():
-            if mode == config.ENCODING_MODES["QUALITY"] and not is_quality_mode_supported:
-                continue
-            self.encoding_mode_combo.addItem(mode)
+        self.pass_combo.setEnabled(True)
+
+        if mode == config.ENCODING_MODES["QUALITY"]:
+            self.value_label.setText(self.tr("Quality (0-51):"))
+            self.value_spin.setSuffix("")
+            self.value_spin.setRange(0, 51)
+            self.value_spin.setSingleStep(1)
+            self.value_spin.setValue(config.DEFAULT_CRF_VALUE)
+            if is_videotoolbox:
+                self.encoding_mode_combo.blockSignals(True)
+                try:
+                    self.encoding_mode_combo.setCurrentText(config.ENCODING_MODES["VBR"])
+                finally:
+                    self.encoding_mode_combo.blockSignals(False)
+            else:
+                 self.pass_combo.setEnabled(False)
         
-        if current_mode in [self.encoding_mode_combo.itemText(i) for i in range(self.encoding_mode_combo.count())]:
-            self.encoding_mode_combo.setCurrentText(current_mode)
-        elif not is_quality_mode_supported:
-             self.encoding_mode_combo.setCurrentText(config.ENCODING_MODES["VBR"])
-
-        current_pass = self.pass_combo.currentText()
-        self.pass_combo.clear()
-        for pass_option in config.ENCODING_PASSES.values():
-            if pass_option == config.ENCODING_PASSES["TWO_PASS"]:
-                if self.encoding_mode_combo.currentText() == config.ENCODING_MODES["QUALITY"] or not is_2pass_supported:
-                    continue
-            self.pass_combo.addItem(pass_option)
-
-        if current_pass in [self.pass_combo.itemText(i) for i in range(self.pass_combo.count())]:
-             self.pass_combo.setCurrentText(current_pass)
-
-        self.encoding_mode_combo.blockSignals(False)
-        self.pass_combo.blockSignals(False)
-
+        elif mode == config.ENCODING_MODES["VBR"]:
+            self.value_label.setText(self.tr("Avg Bitrate (kbps):"))
+            self.value_spin.setSuffix(self.tr(" kbps"))
+            self.value_spin.setRange(*config.ENCODING_BITRATE_RANGE_KBPS)
+            self.value_spin.setSingleStep(100)
+            self.value_spin.setValue(config.DEFAULT_VBR_BITRATE)
+            if is_videotoolbox:
+                self.pass_combo.setEnabled(False)
+            
+        elif mode == config.ENCODING_MODES["CBR"]:
+            self.value_label.setText(self.tr("Bitrate (kbps):"))
+            self.value_spin.setSuffix(self.tr(" kbps"))
+            self.value_spin.setRange(*config.ENCODING_BITRATE_RANGE_KBPS)
+            self.value_spin.setSingleStep(100)
+            self.value_spin.setValue(config.DEFAULT_CBR_BITRATE)
+            if is_videotoolbox:
+                self.pass_combo.setEnabled(False)
+    
     def prompt_install_ffmpeg(self):
         reply = QMessageBox.question(self, self.tr('Install FFmpeg'), self.tr("This application requires FFmpeg to create videos.\n\nThis tool will attempt to install it using a system package manager (winget for Windows, Homebrew for macOS).\n\nNote:\n• The process may take several minutes.\n• Administrator privileges (password) may be required.\n\nDo you want to proceed with the installation?"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -1581,80 +1580,105 @@ class MainWindow(QWidget):
         final_message = "\n\n".join(filter(None, [base_message, user_folder_tip, install_menu_tip]))
         return final_message
 
-    def _check_and_handle_pdf_changes(self, pdf_path: Path):
-        if not pdf_path or not pdf_path.exists():
+    def _check_and_handle_pdf_changes(self) -> bool:
+        try:
+            pdf_path = self._find_single_pdf(self.project_model.project_folder)
+            if not pdf_path:
+                self._cancel_folder_selection()
+                return False
+        except (FileNotFoundError, ValueError) as e:
+            QMessageBox.critical(self, self.tr("PDF Error"), str(e))
             self._cancel_folder_selection()
-            return
+            return False
 
-        # 1. Correctly unpack the (details, error) tuple from the validator.
-        new_pdf_details, error_message = self.validator.get_pdf_details(pdf_path)
-
-        # 2. Handle potential errors from the validator first.
-        if error_message:
-            self.log_message.emit(f"[ERROR] Could not analyze PDF for changes: {error_message}", "app")
-            QMessageBox.critical(self, "PDF Error", f"Failed to analyze the PDF file.\n\nDetails: {error_message}")
-            self._cancel_folder_selection()
-            return
-
-        if not new_pdf_details:
-            self.log_message.emit("[ERROR] PDF analysis returned no data.", "app")
-            self._cancel_folder_selection()
-            return
+        current_pdf_hash = self.validator._get_file_hash(pdf_path)
+        current_pdf_structure = self.validator._get_pdf_structure(pdf_path)
+        
+        if self.validator.validated_pdf_hash and self.validator.validated_pdf_hash == current_pdf_hash:
+            self.write_debug("[INFO] PDF file has not changed. Skipping detailed PDF change analysis.")
+            return True
 
         old_page_count = len(self.project_model.slides)
-        new_page_count = new_pdf_details.get("page_count", 0)
+        new_page_count = current_pdf_structure.get('page_count', 0)
 
-        # 3. Restore the original logic branches.
-        # Case A: The number of pages in the PDF has changed. Show the 3-choice dialog.
         if old_page_count > 0 and old_page_count != new_page_count:
+            self.write_debug("[INFO] PDF page structure has changed.")
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Question)
-            msg_box.setWindowTitle("PDF Structure Changed")
+            msg_box.setWindowTitle(self.tr("PDF Structure Changed"))
             msg_box.setText(
-                f"The number of pages in the PDF has changed from {old_page_count} to {new_page_count}.\n\n"
-                "How would you like to proceed?"
+                self.tr("The number of pages in the PDF has changed from {0} to {1}.\n\n"
+                "How would you like to proceed?").format(old_page_count, new_page_count)
             )
-            migrate_button = msg_box.addButton("Migrate Settings", QMessageBox.ActionRole)
-            reinit_button = msg_box.addButton("Re-initialize Project", QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+            migrate_button = msg_box.addButton(self.tr("Migrate Settings (Experimental)"), QMessageBox.ActionRole)
+            reinit_button = msg_box.addButton(self.tr("Re-initialize Project"), QMessageBox.ActionRole)
+            cancel_button = msg_box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
             msg_box.exec()
 
             if msg_box.clickedButton() == migrate_button:
-                self._migrate_slide_data(new_pdf_details)
+                return self._migrate_slide_data(pdf_path)
             elif msg_box.clickedButton() == reinit_button:
                 self._initialize_new_project(pdf_path)
-            else: # Cancel
+                return True
+            else:
                 self._cancel_folder_selection()
-
-        # Case B: Page count is the same; check for content changes using p-hashes.
-        elif old_page_count > 0 and old_page_count == new_page_count:
-            old_hashes = [slide.p_hash for slide in self.project_model.slides]
-            new_hashes = new_pdf_details.get("p_hashes", [])
-
-            if old_hashes != new_hashes:
-                self.log_message.emit("[INFO] PDF content change detected.", "app")
-                reply = QMessageBox.question(
-                    self,
-                    "PDF Content Changed",
-                    "The content of the PDF file has changed since it was last loaded.\n\n"
-                    "Would you like to update the slide thumbnails and internal data to match the new content?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                if reply == QMessageBox.Yes:
-                    thumbnails = new_pdf_details.get("thumbnails_b64", [])
-                    for i, slide in enumerate(self.project_model.slides):
-                        if i < len(new_hashes):
-                            slide.p_hash = new_hashes[i]
-                        if i < len(thumbnails):
-                            slide.thumbnail_b64 = thumbnails[i]
-                    
-                    self.slide_table_manager.rebuild_table()
-                    self.log_message.emit("[INFO] Slide details updated successfully.", "app")
+                return False
         
-        # Case C: This is the initial load for a new project.
+        elif old_page_count > 0 and old_page_count == new_page_count:
+             self.write_debug("[INFO] PDF content changed without altering page structure. Auto-updating thumbnails.")
+             self.validator.compute_and_populate_pdf_details(self.project_model)
+             self.slide_table_manager.populate_slide_table_from_model()
+             QMessageBox.information(self, self.tr("PDF Content Updated"),
+                                     self.tr("The content of the PDF file was modified.\n"
+                                     "Thumbnails have been automatically updated."))
         else:
             self._initialize_new_project(pdf_path)
+        
+        return True
+
+    def _cancel_folder_selection(self):
+        self.write_debug("[INFO] User cancelled the project folder operation.")
+        self._clear_project()
+        self.state_machine.transition_to(AppState.AWAITING_PROJECT)
+
+    def _initialize_new_project(self, pdf_path: Path):
+        self.write_debug("[INFO] Initializing new project from PDF.")
+        self.project_model.slides.clear()
+        
+        try:
+            with fitz.open(pdf_path) as doc:
+                page_count = doc.page_count
+            self.project_model.slides = [Slide() for _ in range(page_count)]
+            self._rescan_available_materials()
+            
+            self.validator.compute_and_populate_pdf_details(self.project_model)
+            
+            self.slide_table_manager.populate_slide_table_from_model()
+        except Exception as e:
+            QMessageBox.critical(self, self.tr("Error Initializing Project"), f"Could not process the PDF file: {e}")
+            self._cancel_folder_selection()
+
+    def _migrate_slide_data(self, pdf_path: Path) -> bool:
+        self.write_debug("[INFO] Starting slide data migration process.")
+        old_slides = copy.deepcopy(self.project_model.slides)
+        
+        new_pdf_details, error = self.validator.get_pdf_details(pdf_path)
+        if error:
+            QMessageBox.critical(self, self.tr("Migration Error"), f"Could not get details from the new PDF: {error}")
+            return False
+
+        if not new_pdf_details:
+            QMessageBox.critical(self, self.tr("Migration Error"), self.tr("Could not get details from the new PDF for an unknown reason."))
+            return False
+
+        if not self._start_pdf_migration(old_slides, new_pdf_details):
+            # User cancelled the migration dialog, revert to old state
+            self.project_model.slides = old_slides
+            self.slide_table_manager.populate_slide_table_from_model()
+            self._cancel_folder_selection()
+            return False
+            
+        return True
 
     def _start_pdf_migration(self, old_slides: list[Slide], new_pdf_details: dict) -> bool:
         dialog = PageMappingDialog(old_slides, new_pdf_details, self)
