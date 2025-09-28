@@ -1005,7 +1005,7 @@ class ProjectValidator:
             )
             messages.add_project_notice(msg)
 
-def _get_media_info(self, media_path: Path):
+    def _get_media_info(self, media_path: Path):
         try:
             cmd = [
                 str(get_ffprobe_path()),
