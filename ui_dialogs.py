@@ -267,9 +267,6 @@ class PageMappingDialog(QDialog):
 
     @Slot(int, int)
     def _on_source_changed(self, row: int, combo_index: int):
-        """
-        Updates both the source info text and the source thumbnail.
-        """
         combo = self.table.cellWidget(row, COL_SOURCE_COMBO)
         source_thumb_label = self.table.cellWidget(row, COL_SOURCE_THUMB)
         source_info_label = self.table.cellWidget(row, COL_SOURCE_INFO)
