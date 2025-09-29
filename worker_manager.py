@@ -11,6 +11,7 @@ from workers import EncoderTestWorker, ProjectSetupWorker, ValidationWorker
 
 class WorkerManager(QObject):
     transient_worker_finished = Signal()
+    transient_worker_busy = Signal(str)
 
     validation_finished = Signal(object, int, dict)
     validation_error = Signal(str)
@@ -60,6 +61,7 @@ class WorkerManager(QObject):
 
     def _start_transient_worker(self, worker_class, worker_args: tuple, signals_to_slots: dict):
         if self.current_transient_thread and self.current_transient_thread.isRunning():
+            self.transient_worker_busy.emit("A process is already running. Please wait for it to complete.")
             return
 
         self.current_transient_thread = QThread()

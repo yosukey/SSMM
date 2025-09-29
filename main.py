@@ -1,6 +1,7 @@
 # main.py
 import sys
 import argparse
+import traceback
 from pathlib import Path
 
 SHOULD_SHOW_SPLASH = not (getattr(sys, 'frozen', False) and sys.platform == 'darwin')
@@ -57,6 +58,26 @@ class SplashScreenManager:
         if self.app_is_ready and self.timer_is_done:
             self.splash.finish(self.window)
 
+class PyiSplashScreenManager:
+    def __init__(self):
+        self.window_is_ready = False
+        self.timer_is_done = False
+
+    def set_window_ready(self):
+        self.window_is_ready = True
+        self.close_if_ready()
+
+    def set_timer_done(self):
+        self.timer_is_done = True
+        self.close_if_ready()
+
+    def close_if_ready(self):
+        if self.window_is_ready and self.timer_is_done:
+            try:
+                import pyi_splash
+                pyi_splash.close()
+            except (ImportError, KeyError, RuntimeError):
+                pass
 
 if __name__ == "__main__":
     check_python_version()
@@ -79,77 +100,74 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet("auto"))
 
-    splash = None
-    manager = None
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    exit_code = 0
 
-    if SHOULD_SHOW_SPLASH:
-        if not is_pyinstaller_bundle:
-            try:
-                splash_pix = QPixmap(str(resolve_resource_path("assets/splash_screen.png")))
-                if not splash_pix.isNull():
-                    splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
-                    splash.show()
-                    splash.showMessage("Loading application, please wait...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
-            except Exception as e:
-                print(f"Could not create QSplashScreen: {e}")
-        else:
-            pass
+    try:
+        splash = None
+        manager = None
+        pyi_manager = None
 
-    window = MainWindow(
-        verbose_startup=args.verbose,
-        project_path_on_startup=args.project_path
-    )
+        if SHOULD_SHOW_SPLASH:
+            if not is_pyinstaller_bundle:
+                try:
+                    splash_pix = QPixmap(str(resolve_resource_path("assets/splash_screen.png")))
+                    if not splash_pix.isNull():
+                        splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
+                        splash.show()
+                        splash.showMessage("Loading application, please wait...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+                except Exception as e:
+                    print(f"Could not create QSplashScreen: {e}")
+            else:
+                pyi_manager = PyiSplashScreenManager()
 
-    pyi_window_ready = False
-    pyi_timer_done = False
+        window = MainWindow(
+            verbose_startup=args.verbose,
+            project_path_on_startup=args.project_path
+        )
 
-    def close_pyi_splash_if_ready():
-        if pyi_window_ready and pyi_timer_done:
+        if splash:
+            manager = SplashScreenManager(splash, window)
+            QTimer.singleShot(4000, manager.set_timer_done)
+
+        try:
+            icon_path = resolve_resource_path("assets/app_icon.png")
+            if icon_path.exists():
+                app_icon = QIcon(str(icon_path))
+                window.setWindowIcon(app_icon)
+        except Exception as e:
+            print(f"Could not load application icon: {e}")
+
+        stdout_stream = EmittingStream()
+        stdout_stream.text_written.connect(window.write_debug)
+        stderr_stream = EmittingStream()
+        stderr_stream.text_written.connect(window.write_debug)
+        sys.stdout = stdout_stream
+        sys.stderr = stderr_stream
+
+        window.show()
+
+        if SHOULD_SHOW_SPLASH:
+            if is_pyinstaller_bundle and pyi_manager:
+                QTimer.singleShot(4000, pyi_manager.set_timer_done)
+                pyi_manager.set_window_ready()
+            elif manager:
+                manager.set_app_ready()
+
+        exit_code = app.exec()
+
+    except Exception as e:
+        original_stderr.write(f"\n[FATAL] An unhandled exception occurred during application lifecycle: {e}\n")
+        traceback.print_exc(file=original_stderr)
+        exit_code = 1
+        if is_pyinstaller_bundle:
             try:
                 import pyi_splash
                 pyi_splash.close()
-            except (ImportError, KeyError, RuntimeError):
-                pass
-    
-    def on_pyi_timer_done():
-        global pyi_timer_done
-        pyi_timer_done = True
-        close_pyi_splash_if_ready()
+            except (ImportError, KeyError, RuntimeError) as splash_e:
+                original_stderr.write(f"Additionally, failed to close PyInstaller splash screen: {splash_e}\n")
 
-    if splash:
-        manager = SplashScreenManager(splash, window)
-        QTimer.singleShot(4000, manager.set_timer_done)
-
-    try:
-        icon_path = resolve_resource_path("assets/app_icon.png")
-        if icon_path.exists():
-            app_icon = QIcon(str(icon_path))
-            window.setWindowIcon(app_icon)
-    except Exception as e:
-        print(f"Could not load application icon: {e}")
-
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    stdout_stream = EmittingStream()
-    stdout_stream.text_written.connect(window.write_debug)
-    stderr_stream = EmittingStream()
-    stderr_stream.text_written.connect(window.write_debug)
-    sys.stdout = stdout_stream
-    sys.stderr = stderr_stream
-
-    window.show()
-
-    if SHOULD_SHOW_SPLASH:
-        if is_pyinstaller_bundle:
-            QTimer.singleShot(4000, on_pyi_timer_done)
-            pyi_window_ready = True
-            close_pyi_splash_if_ready()
-        elif manager:
-            manager.set_app_ready()
-
-    exit_code = 0
-    try:
-        exit_code = app.exec()
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
