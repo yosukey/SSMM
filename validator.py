@@ -424,7 +424,7 @@ class ProjectValidator:
                 page_count = len(project_model.slides)
             
             # Condition 2: Minor change (hash differs, but page count is the same).
-            elif not project_model.slides or (current_pdf_hash != self.validated_pdf_hash and len(project_model.slides) == current_pdf_structure.get('page_count', -1)):
+            elif self.validated_pdf_hash and current_pdf_hash != self.validated_pdf_hash and len(project_model.slides) == current_pdf_structure.get('page_count', -1):
                 self.log("[INFO] PDF content changed without altering page structure. Updating thumbnails automatically.")
                 self.compute_and_populate_pdf_details(project_model)
                 msg = (
