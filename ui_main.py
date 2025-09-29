@@ -17,7 +17,8 @@ class ClickableLabel(QLabel):
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
-        MainWindow.setWindowTitle(f"Simple Slideshow Movie Maker v{MainWindow.__version__}")
+        title_version = f"v{MainWindow.__version__}" if MainWindow.__version__ != 'local-dev' else MainWindow.__version__
+        MainWindow.setWindowTitle(f"Simple Slideshow Movie Maker {title_version}")
         MainWindow.setMinimumSize(1200, 870)
 
         MainWindow.select_project_folder_button = QPushButton(MainWindow.tr("Browse..."))

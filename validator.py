@@ -417,7 +417,7 @@ class ProjectValidator:
         else:
             current_pdf_hash = self._get_file_hash(pdf_path)
             current_pdf_structure = self._get_pdf_structure(pdf_path)
-            
+ 
             # Condition 1: PDF is completely unchanged (hash matches).
             if self.validated_pdf_hash and self.validated_pdf_hash == current_pdf_hash:
                 self.log("[INFO] PDF file has not changed. Skipping detailed PDF analysis.")
