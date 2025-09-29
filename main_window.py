@@ -1627,15 +1627,19 @@ class MainWindow(QWidget):
                 self._cancel_folder_selection()
                 return False
         
-        elif old_page_count > 0 and old_page_count == new_page_count:
+        elif self.validator.validated_pdf_hash and old_page_count > 0 and old_page_count == new_page_count:
              self.write_debug("[INFO] PDF content changed without altering page structure. Auto-updating thumbnails.")
              self.validator.compute_and_populate_pdf_details(self.project_model)
              self.slide_table_manager.populate_slide_table_from_model()
              QMessageBox.information(self, self.tr("PDF Content Updated"),
                                      self.tr("The content of the PDF file was modified.\n"
                                      "Thumbnails have been automatically updated."))
+             self.validator.validated_pdf_hash = current_pdf_hash
         else:
-            self._initialize_new_project(pdf_path)
+            if old_page_count == 0:
+                self._initialize_new_project(pdf_path)
+            else:
+                self.write_debug("[INFO] New project loaded. No previous PDF state to compare against.")
         
         return True
 
