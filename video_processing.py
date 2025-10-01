@@ -10,6 +10,9 @@ import re
 import json
 import shutil
 import shlex
+import platform
+import os
+import math
 
 from PySide6.QtCore import QObject, Signal, Slot, QProcess
 import fitz
@@ -22,6 +25,57 @@ from slide_processor import SlideProcessorFactory
 
 class ProcessingCanceled(Exception):
     pass
+
+class SleepInhibitor:
+    def __init__(self, logger_func):
+        self.logger = logger_func
+        self.inhibitor_process = None
+        self.os_type = platform.system()
+
+        if self.os_type == "Windows":
+            self.ES_CONTINUOUS = 0x80000000
+            self.ES_SYSTEM_REQUIRED = 0x00000001
+
+    def __enter__(self):
+        if self.os_type == "Windows":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetThreadExecutionState(
+                    self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED)
+                self.logger("[INFO] System sleep temporarily inhibited for video processing (Windows).", 'app')
+            except Exception as e:
+                self.logger(f"[WARNING] Could not inhibit system sleep on Windows: {e}", 'app')
+        
+        elif self.os_type == "Darwin":
+            try:
+                pid = os.getpid()
+                self.inhibitor_process = subprocess.Popen(['caffeinate', '-i', '-w', str(pid)])
+                self.logger(f"[INFO] System sleep temporarily inhibited via 'caffeinate' (for PID: {pid}) for video processing (macOS).", 'app')
+            except Exception as e:
+                self.logger(f"[WARNING] Could not inhibit system sleep on macOS using caffeinate: {e}", 'app')
+        
+        else:
+            self.logger(f"[INFO] Sleep inhibition is not supported on this OS ({self.os_type}).", 'app')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.os_type == "Windows":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
+                self.logger("[INFO] System sleep inhibition released (Windows).", 'app')
+            except Exception as e:
+                self.logger(f"[WARNING] Could not release sleep inhibition on Windows: {e}", 'app')
+
+        elif self.os_type == "Darwin" and self.inhibitor_process:
+            try:
+                if self.inhibitor_process.poll() is None:
+                    self.inhibitor_process.terminate()
+                    self.inhibitor_process.wait(timeout=2)
+                self.logger("[INFO] System sleep inhibition released ('caffeinate' process).", 'app')
+            except Exception as e:
+                self.logger(f"[WARNING] Could not terminate caffeinate process: {e}", 'app')
+            finally:
+                self.inhibitor_process = None
 
 class VideoProcessor(QObject):
     progress_updated = Signal(int)
@@ -38,6 +92,14 @@ class VideoProcessor(QObject):
         self._current_step = 0
         self._total_steps = 1
         self._is_verbose = False
+
+    def _quantize_duration_for_fps(self, duration: float, fps: int) -> float:
+        if duration <= 0 or fps <= 0:
+            return 0.0
+        
+        total_frames = math.ceil(duration * fps)
+        
+        return total_frames / fps
 
     def cancel(self):
         self._is_canceled = True
@@ -136,199 +198,199 @@ class VideoProcessor(QObject):
         return builder
 
     def run_video_creation(self, project_model: ProjectModel):
-        self._is_canceled = False
-        self.watermark_path = None
-        
-        final_video_path = project_model.output_folder / f"{project_model.parameters.filename_input}.mp4"
-        temp_video_path = final_video_path.with_name(final_video_path.stem + ".tmp" + final_video_path.suffix)
-        output_dir = project_model.output_folder or Path(".")
-        delete_temp = project_model.parameters.delete_temp_checkbox
-        
-        try:
-            if delete_temp:
-                with tempfile.TemporaryDirectory(dir=output_dir, prefix="movie-temp-", ignore_cleanup_errors=True) as temp_dir:
-                    self._run_logic(project_model, Path(temp_dir), temp_video_path)
-            else:
-                temp_dir = tempfile.mkdtemp(dir=output_dir, prefix="movie-temp-")
-                self.log_message.emit(f"Temporary files are being kept in: {temp_dir}", 'app')
-                self._run_logic(project_model, Path(temp_dir), temp_video_path)
-
-            if not self._is_canceled:
-                if final_video_path.exists():
-                    final_video_path.unlink()
-                shutil.move(str(temp_video_path), str(final_video_path))
-
-                if project_model.parameters.export_youtube_chapters:
-                    self.log_message.emit("Generating YouTube chapter file...", 'app')
-                    try:
-                        self._generate_youtube_chapter_file(project_model, final_video_path)
-                        self.log_message.emit("YouTube chapter file generated successfully.", 'app')
-                    except Exception as chap_e:
-                        self.log_message.emit(f"[ERROR] Could not generate YouTube chapter file: {chap_e}", 'app')
-                
-                return (True, str(final_video_path))
-
-        except ProcessingCanceled:
-            if temp_video_path.exists():
-                temp_video_path.unlink()
-            self.log_message.emit("Video creation was canceled by user.", 'app')
-            return (False, "Canceled by user.")
-        except Exception as e:
-            if temp_video_path.exists():
-                temp_video_path.unlink()
-            self.log_message.emit(f"[ERROR] An exception occurred: {e}", 'app')
-            return (False, str(e))
-        finally:
+        with SleepInhibitor(self.log_message.emit):
+            self._is_canceled = False
             self.watermark_path = None
+            
+            final_video_path = project_model.output_folder / f"{project_model.parameters.filename_input}.mp4"
+            temp_video_path = final_video_path.with_name(final_video_path.stem + ".tmp" + final_video_path.suffix)
+            output_dir = project_model.output_folder or Path(".")
+            delete_temp = project_model.parameters.delete_temp_checkbox
+            
+            try:
+                if delete_temp:
+                    with tempfile.TemporaryDirectory(dir=output_dir, prefix="movie-temp-", ignore_cleanup_errors=True) as temp_dir:
+                        self._run_logic(project_model, Path(temp_dir), temp_video_path)
+                else:
+                    temp_dir = tempfile.mkdtemp(dir=output_dir, prefix="movie-temp-")
+                    self.log_message.emit(f"Temporary files are being kept in: {temp_dir}", 'app')
+                    self._run_logic(project_model, Path(temp_dir), temp_video_path)
+
+                if not self._is_canceled:
+                    if final_video_path.exists():
+                        final_video_path.unlink()
+                    shutil.move(str(temp_video_path), str(final_video_path))
+
+                    if project_model.parameters.export_youtube_chapters:
+                        self.log_message.emit("Generating YouTube chapter file...", 'app')
+                        try:
+                            self._generate_youtube_chapter_file(project_model, final_video_path)
+                            self.log_message.emit("YouTube chapter file generated successfully.", 'app')
+                        except Exception as chap_e:
+                            self.log_message.emit(f"[ERROR] Could not generate YouTube chapter file: {chap_e}", 'app')
+                    
+                    return (True, str(final_video_path))
+
+            except ProcessingCanceled:
+                if temp_video_path.exists():
+                    temp_video_path.unlink()
+                self.log_message.emit("Video creation was canceled by user.", 'app')
+                return (False, "Canceled by user.")
+            except Exception as e:
+                if temp_video_path.exists():
+                    temp_video_path.unlink()
+                self.log_message.emit(f"[ERROR] An exception occurred: {e}", 'app')
+                return (False, str(e))
+            finally:
+                self.watermark_path = None
 
     def run_preview_creation(self, project_model: ProjectModel, slide_index: int, pdf_path: Path, include_intervals: bool):
-        self._is_canceled = False
-        self.watermark_path = None
-        
-        base_filename = project_model.parameters.filename_input
-        if not base_filename:
-            base_filename = project_model.project_folder.name
-        
-        random_id = uuid.uuid4().hex[:8]
-        preview_filename = f"{base_filename}-preview-slide{slide_index+1}-{random_id}.mp4"
-        final_preview_path = project_model.output_folder / preview_filename
-        
-        delete_temp = project_model.parameters.delete_temp_checkbox
-        output_dir = project_model.output_folder or Path(".")
-
-        def _run_in_temp_dir(temp_folder: Path):
-            if not delete_temp:
-                self.log_message.emit(f"Temporary files for preview are being kept in: {temp_folder}", 'app')
-
-            image_paths_cache = {}
-            target_width = int(project_model.parameters.resolution.split('x')[0])
-
-            params = project_model.parameters
-            if params.add_watermark and params.watermark_text:
-                try:
-                    width, height = map(int, params.resolution.split('x'))
-                    self.watermark_path = self._generate_watermark_image(params, width, height, temp_folder)
-                except Exception as e:
-                        self.log_message.emit(f"[WARNING] Could not generate watermark image for preview, skipping: {e}", 'app')
-
-            self.progress_updated.emit(10)
-            
-            self.log_message.emit(f"Generating main video for slide {slide_index + 1}...", 'app')
-            main_slide = project_model.slides[slide_index]
-            codec_option = self._resolve_codec_option(project_model.parameters.codec, project_model.parameters.hardware_encoding)
-            
-            with fitz.open(pdf_path) as doc:
-                if slide_index not in image_paths_cache:
-                    image_paths_cache[slide_index] = self._render_single_page(doc, slide_index, target_width, temp_folder)
-                main_image_path = image_paths_cache[slide_index]
-                
-                main_video_path = temp_folder / f"slide_{slide_index+1:03d}_main.mp4"
-                
-                slide_info = (slide_index, main_slide, project_model, {slide_index: main_image_path}, temp_folder, codec_option)
-                self._generate_single_slide_video(slide_info, output_path=main_video_path)
-                self.progress_updated.emit(40)
-                if self._is_canceled: raise ProcessingCanceled()
-
-                videos_to_concat = []
-                
-                if include_intervals and slide_index > 0:
-                    self.log_message.emit(f"Generating interval before slide {slide_index + 1}...", 'app')
-                    prev_slide_model = project_model.slides[slide_index - 1]
-                    if prev_slide_model.interval_to_next > 0:
-                        prev_slide_index = slide_index - 1
-                        if prev_slide_index not in image_paths_cache:
-                            image_paths_cache[prev_slide_index] = self._render_single_page(doc, prev_slide_index, target_width, temp_folder)
-                        prev_slide_frame = image_paths_cache[prev_slide_index]
-
-                        start_frame_of_main = image_paths_cache[slide_index]
-
-                        interval_before_path = self._create_interval_for_preview(
-                            project_model, prev_slide_frame, start_frame_of_main,
-                            prev_slide_model, temp_folder, codec_option, f"before_{slide_index}"
-                        )
-                        videos_to_concat.append(interval_before_path)
-                
-                videos_to_concat.append(main_video_path)
-                self.progress_updated.emit(70)
-
-                if include_intervals and slide_index < len(project_model.slides) - 1:
-                    self.log_message.emit(f"Generating interval after slide {slide_index + 1}...", 'app')
-                    if main_slide.interval_to_next > 0:
-                        end_frame_of_main = image_paths_cache[slide_index]
-
-                        next_slide_index = slide_index + 1
-                        if next_slide_index not in image_paths_cache:
-                            image_paths_cache[next_slide_index] = self._render_single_page(doc, next_slide_index, target_width, temp_folder)
-                        next_slide_frame = image_paths_cache[next_slide_index]
-
-                        interval_after_path = self._create_interval_for_preview(
-                            project_model, end_frame_of_main, next_slide_frame,
-                            main_slide, temp_folder, codec_option, f"after_{slide_index}"
-                        )
-                        videos_to_concat.append(interval_after_path)
-            
-            if len(videos_to_concat) > 1:
-                self.log_message.emit("Concatenating preview parts...", 'app')
-                concat_list_path = temp_folder / 'concat_preview_list.txt'
-                with concat_list_path.open('w', encoding='utf-8') as f:
-                    for video in videos_to_concat:
-                        f.write(f"file '{self._sanitize_path_for_concat(str(video))}'\n")
-                
-                # --- Attempt 1: Fast concatenation with stream copy ---
-                try:
-                    self.log_message.emit("Attempting fast concatenation (stream copy)...", 'app')
-                    builder_copy = self._create_ffmpeg_builder()
-                    concat_command_copy = (builder_copy
-                        .add_input(concat_list_path, ['-f', 'concat', '-safe', '0'])
-                        .set_output(final_preview_path, ['-c', 'copy', '-movflags', '+faststart'])
-                        .build())
-                    self._run_subprocess(concat_command_copy)
-                    self.log_message.emit("Fast concatenation successful.", 'app')
-
-                except Exception as e:
-                    # --- Attempt 2: Fallback to safer re-encoding ---
-                    self.log_message.emit(f"[WARNING] Fast concatenation failed. Retrying with full re-encode... Reason: {e}", 'app')
-                    
-                    video_opts = self._get_video_encoding_options(project_model.parameters, pass_num=1, is_single_pass_override=True)
-                    audio_opts = self._get_common_audio_options(project_model.parameters)
-                    fps = project_model.parameters.fps
-                    
-                    builder_recode = self._create_ffmpeg_builder()
-                    concat_command_recode = (builder_recode
-                        .add_input(concat_list_path, ['-f', 'concat', '-safe', '0'])
-                        .set_output(final_preview_path, 
-                            ['-c:v', codec_option] + video_opts + 
-                            audio_opts + 
-                            ['-r', str(fps), '-movflags', '+faststart']
-                        )
-                        .build())
-                    
-                    self._run_subprocess(concat_command_recode)
-                    self.log_message.emit("Re-encode concatenation successful.", 'app')
-
-            else:
-                shutil.move(str(main_video_path), str(final_preview_path))
-
-            self.progress_updated.emit(100)
-        
-        try:
-            if delete_temp:
-                with tempfile.TemporaryDirectory(dir=output_dir, prefix="preview-temp-", ignore_cleanup_errors=True) as temp_dir_str:
-                    _run_in_temp_dir(Path(temp_dir_str))
-            else:
-                temp_dir_str = tempfile.mkdtemp(dir=output_dir, prefix="preview-temp-")
-                _run_in_temp_dir(Path(temp_dir_str))
-            
-            return (True, str(final_preview_path))
-
-        except ProcessingCanceled:
-            self.log_message.emit("Preview creation was canceled by user.", 'app')
-            return (False, "Canceled by user.")
-        except Exception as e:
-            self.log_message.emit(f"[ERROR] An exception occurred during preview creation: {e}", 'app')
-            return (False, str(e))
-        finally:
+        with SleepInhibitor(self.log_message.emit):
+            self._is_canceled = False
             self.watermark_path = None
+            
+            base_filename = project_model.parameters.filename_input
+            if not base_filename:
+                base_filename = project_model.project_folder.name
+            
+            random_id = uuid.uuid4().hex[:8]
+            preview_filename = f"{base_filename}-preview-slide{slide_index+1}-{random_id}.mp4"
+            final_preview_path = project_model.output_folder / preview_filename
+            
+            delete_temp = project_model.parameters.delete_temp_checkbox
+            output_dir = project_model.output_folder or Path(".")
+
+            def _run_in_temp_dir(temp_folder: Path):
+                if not delete_temp:
+                    self.log_message.emit(f"Temporary files for preview are being kept in: {temp_folder}", 'app')
+
+                image_paths_cache = {}
+                target_width = int(project_model.parameters.resolution.split('x')[0])
+
+                params = project_model.parameters
+                if params.add_watermark and params.watermark_text:
+                    try:
+                        width, height = map(int, params.resolution.split('x'))
+                        self.watermark_path = self._generate_watermark_image(params, width, height, temp_folder)
+                    except Exception as e:
+                            self.log_message.emit(f"[WARNING] Could not generate watermark image for preview, skipping: {e}", 'app')
+
+                self.progress_updated.emit(10)
+                
+                self.log_message.emit(f"Generating main video for slide {slide_index + 1}...", 'app')
+                main_slide = project_model.slides[slide_index]
+                codec_option = self._resolve_codec_option(project_model.parameters.codec, project_model.parameters.hardware_encoding)
+                
+                with fitz.open(pdf_path) as doc:
+                    if slide_index not in image_paths_cache:
+                        image_paths_cache[slide_index] = self._render_single_page(doc, slide_index, target_width, temp_folder)
+                    main_image_path = image_paths_cache[slide_index]
+                    
+                    main_video_path = temp_folder / f"slide_{slide_index+1:03d}_main.mp4"
+                    
+                    slide_info = (slide_index, main_slide, project_model, {slide_index: main_image_path}, temp_folder, codec_option)
+                    self._generate_single_slide_video(slide_info, output_path=main_video_path)
+                    self.progress_updated.emit(40)
+                    if self._is_canceled: raise ProcessingCanceled()
+
+                    videos_to_concat = []
+                    
+                    if include_intervals and slide_index > 0:
+                        self.log_message.emit(f"Generating interval before slide {slide_index + 1}...", 'app')
+                        prev_slide_model = project_model.slides[slide_index - 1]
+                        if prev_slide_model.interval_to_next > 0:
+                            prev_slide_index = slide_index - 1
+                            if prev_slide_index not in image_paths_cache:
+                                image_paths_cache[prev_slide_index] = self._render_single_page(doc, prev_slide_index, target_width, temp_folder)
+                            prev_slide_frame = image_paths_cache[prev_slide_index]
+
+                            start_frame_of_main = image_paths_cache[slide_index]
+
+                            interval_before_path = self._create_interval_for_preview(
+                                project_model, prev_slide_frame, start_frame_of_main,
+                                prev_slide_model, temp_folder, codec_option, f"before_{slide_index}"
+                            )
+                            videos_to_concat.append(interval_before_path)
+                    
+                    videos_to_concat.append(main_video_path)
+                    self.progress_updated.emit(70)
+
+                    if include_intervals and slide_index < len(project_model.slides) - 1:
+                        self.log_message.emit(f"Generating interval after slide {slide_index + 1}...", 'app')
+                        if main_slide.interval_to_next > 0:
+                            end_frame_of_main = image_paths_cache[slide_index]
+
+                            next_slide_index = slide_index + 1
+                            if next_slide_index not in image_paths_cache:
+                                image_paths_cache[next_slide_index] = self._render_single_page(doc, next_slide_index, target_width, temp_folder)
+                            next_slide_frame = image_paths_cache[next_slide_index]
+
+                            interval_after_path = self._create_interval_for_preview(
+                                project_model, end_frame_of_main, next_slide_frame,
+                                main_slide, temp_folder, codec_option, f"after_{slide_index}"
+                            )
+                            videos_to_concat.append(interval_after_path)
+                
+                if len(videos_to_concat) > 1:
+                    self.log_message.emit("Concatenating preview parts...", 'app')
+                    concat_list_path = temp_folder / 'concat_preview_list.txt'
+                    with concat_list_path.open('w', encoding='utf-8') as f:
+                        for video in videos_to_concat:
+                            f.write(f"file '{self._sanitize_path_for_concat(str(video))}'\n")
+                    
+                    try:
+                        self.log_message.emit("Attempting fast concatenation (stream copy)...", 'app')
+                        builder_copy = self._create_ffmpeg_builder()
+                        concat_command_copy = (builder_copy
+                            .add_input(concat_list_path, ['-f', 'concat', '-safe', '0'])
+                            .set_output(final_preview_path, ['-c', 'copy', '-movflags', '+faststart'])
+                            .build())
+                        self._run_subprocess(concat_command_copy)
+                        self.log_message.emit("Fast concatenation successful.", 'app')
+
+                    except Exception as e:
+                        self.log_message.emit(f"[WARNING] Fast concatenation failed. Retrying with full re-encode... Reason: {e}", 'app')
+                        
+                        video_opts = self._get_video_encoding_options(project_model.parameters, pass_num=1, is_single_pass_override=True)
+                        audio_opts = self._get_common_audio_options(project_model.parameters)
+                        fps = project_model.parameters.fps
+                        
+                        builder_recode = self._create_ffmpeg_builder()
+                        concat_command_recode = (builder_recode
+                            .add_input(concat_list_path, ['-f', 'concat', '-safe', '0'])
+                            .set_output(final_preview_path, 
+                                ['-c:v', codec_option] + video_opts + 
+                                audio_opts + 
+                                ['-r', str(fps), '-movflags', '+faststart']
+                            )
+                            .build())
+                        
+                        self._run_subprocess(concat_command_recode)
+                        self.log_message.emit("Re-encode concatenation successful.", 'app')
+
+                else:
+                    shutil.move(str(main_video_path), str(final_preview_path))
+
+                self.progress_updated.emit(100)
+            
+            try:
+                if delete_temp:
+                    with tempfile.TemporaryDirectory(dir=output_dir, prefix="preview-temp-", ignore_cleanup_errors=True) as temp_dir_str:
+                        _run_in_temp_dir(Path(temp_dir_str))
+                else:
+                    temp_dir_str = tempfile.mkdtemp(dir=output_dir, prefix="preview-temp-")
+                    _run_in_temp_dir(Path(temp_dir_str))
+                
+                return (True, str(final_preview_path))
+
+            except ProcessingCanceled:
+                self.log_message.emit("Preview creation was canceled by user.", 'app')
+                return (False, "Canceled by user.")
+            except Exception as e:
+                self.log_message.emit(f"[ERROR] An exception occurred during preview creation: {e}", 'app')
+                return (False, str(e))
+            finally:
+                self.watermark_path = None
 
     def _generate_single_slide_video(self, slide_info: tuple, output_path: Path = None) -> tuple[int, Path]:
         if self._is_canceled:
@@ -346,7 +408,7 @@ class VideoProcessor(QObject):
         return i, slide_video_path
 
     def _create_interval_for_preview(self, model, prev_frame_path, next_frame_path, slide_with_settings, temp_dir, codec, index_suffix):
-        interval_duration = slide_with_settings.interval_to_next
+        interval_duration = self._quantize_duration_for_fps(slide_with_settings.interval_to_next, model.parameters.fps)
         transition_name = slide_with_settings.transition_to_next
         output_path = temp_dir / f"interval_preview_{index_suffix}.mp4"
         
@@ -393,13 +455,15 @@ class VideoProcessor(QObject):
         prev_ext = temp_dir / f'prev_extended_preview_{index_suffix}.mp4'
         next_ext = temp_dir / f'next_extended_preview_{index_suffix}.mp4'
         
+        quantized_duration = self._quantize_duration_for_fps(duration, fps)
+
         video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
         
         for frame_path, video_path in [(prev_frame, prev_ext), (next_frame, next_ext)]:
             builder = self._create_ffmpeg_builder()
             builder.add_input(frame_path, ['-loop', '1'])
-            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(duration)])
+            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
 
             final_video_stream = "[0:v]"
             filter_chains = [f"{final_video_stream}scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2[v_scaled]"]
@@ -416,7 +480,7 @@ class VideoProcessor(QObject):
             filters = ";".join(filter_chains)
             builder.set_filter_complex(filters)
             
-            output_options = maps + ['-c:v', codec] + video_opts + audio_opts + ['-t', str(duration), '-r', str(fps)]
+            output_options = maps + ['-c:v', codec] + video_opts + audio_opts + ['-t', str(quantized_duration), '-r', str(fps)]
             builder.set_output(video_path, output_options)
             
             cmd = builder.build()
@@ -720,15 +784,24 @@ class VideoProcessor(QObject):
         maps = ['-map', final_video_stream]
         audio_input_index = -1
         
+        target_duration = 0.0
         if audio_path:
             builder.add_input(audio_path)
             audio_input_index = len(builder.inputs) - 1
-            audio_duration = self._get_media_duration(audio_path)
-            duration_option = ['-t', str(audio_duration)]
+            target_duration = self._get_media_duration(audio_path)
         else:
-            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(duration or 1)])
+            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi'])
             audio_input_index = len(builder.inputs) - 1
-            duration_option = ['-t', str(duration or 1)]
+            target_duration = duration or 1
+        
+        quantized_duration = self._quantize_duration_for_fps(target_duration, fps)
+        duration_option = ['-t', str(quantized_duration)]
+
+        if audio_path:
+            builder.inputs[audio_input_index]['options'].extend(duration_option)
+        else: # Silent audio
+            builder.inputs[audio_input_index]['options'].extend(['-t', str(quantized_duration)])
+
 
         if slide.filename and slide.filename != config.SILENT_MATERIAL_NAME:
             if slide.audio_streams and 0 <= slide.selected_audio_stream_index < len(slide.audio_streams):
@@ -843,7 +916,9 @@ class VideoProcessor(QObject):
         final_stream_name = "[overlaid]"
         
         builder = self._create_ffmpeg_builder()
-        builder.add_input(image, ['-loop', '1', '-t', str(slide.duration)])
+        
+        quantized_duration = self._quantize_duration_for_fps(slide.duration, fps)
+        builder.add_input(image, ['-loop', '1', '-t', str(quantized_duration)])
         builder.add_input(video, ['-noautorotate', '-vsync', 'cfr'])
 
         if self.watermark_path:
@@ -864,7 +939,7 @@ class VideoProcessor(QObject):
                 maps.extend(['-map', '1:a?'])
         else:
             silent_audio_input_index = len(builder.inputs)
-            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi'])
+            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
             maps.extend(['-map', f'{silent_audio_input_index}:a'])
         
         other_opts = ['-r', str(fps), '-shortest']
@@ -873,14 +948,17 @@ class VideoProcessor(QObject):
         self._execute_encoding(builder, output, params, codec)
 
     def _create_transition_video(self, model, prev, next_vid, duration, trans, output_path, codec, index):
+        quantized_duration = self._quantize_duration_for_fps(duration, model.parameters.fps)
         ffmpeg_keyword = config.TRANSITION_MAPPINGS.get(trans)
+
         if not ffmpeg_keyword:
-            self._create_simple_interval_video(model, prev, next_vid, duration, output_path, codec, index)
+            self._create_simple_interval_video(model, prev, next_vid, quantized_duration, output_path, codec, index)
             return
-        temp_dir = output_path.parent
-        prev_ext, next_ext, prev_frame, next_frame = self._create_extended_videos(model, prev, next_vid, duration, codec, temp_dir, index)
         
-        filter_complex = f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={duration}:offset=0[v];[0:a][1:a]acrossfade=d={duration}:curve1=tri:curve2=tri[a]"
+        temp_dir = output_path.parent
+        prev_ext, next_ext, prev_frame, next_frame = self._create_extended_videos(model, prev, next_vid, quantized_duration, codec, temp_dir, index)
+        
+        filter_complex = f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={quantized_duration}:offset=0[v];[0:a][1:a]acrossfade=d={quantized_duration}:curve1=tri:curve2=tri[a]"
         
         video_opts = self._get_video_encoding_options(model.parameters, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(model.parameters)
@@ -934,18 +1012,19 @@ class VideoProcessor(QObject):
         
         prev_ext = temp_dir / f'prev_extended_{index}.mp4'
         next_ext = temp_dir / f'next_extended_{index}.mp4'
+        quantized_duration = self._quantize_duration_for_fps(duration, fps)
         video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
         
         for frame, video in [(prev_frame, prev_ext), (next_frame, next_ext)]:
             builder = self._create_ffmpeg_builder()
             builder.add_input(frame, ['-loop', '1'])
-            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(duration)])
+            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
             
             filter_str = f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2[v_out]"
             builder.set_filter_complex(filter_str)
 
-            output_options = ['-map', '[v_out]', '-map', '1:a', '-c:v', codec] + video_opts + audio_opts + ['-t', str(duration), '-r', str(fps)]
+            output_options = ['-map', '[v_out]', '-map', '1:a', '-c:v', codec] + video_opts + audio_opts + ['-t', str(quantized_duration), '-r', str(fps)]
             
             command = builder.set_output(video, output_options).build()
             self._run_subprocess(command)
@@ -1153,9 +1232,11 @@ class VideoProcessor(QObject):
             if slide.chapter_title:
                 chapters.append({'title': slide.chapter_title, 'start_time': current_time})
             
-            current_time += slide.duration
+            quantized_duration = self._quantize_duration_for_fps(slide.duration, model.parameters.fps)
+            current_time += quantized_duration
             if i < len(model.slides) - 1:
-                current_time += slide.interval_to_next
+                quantized_interval = self._quantize_duration_for_fps(slide.interval_to_next, model.parameters.fps)
+                current_time += quantized_interval
         
         if not chapters or len(chapters) < 3 or chapters[0]['start_time'] != 0.0:
             raise ValueError("Chapter data does not meet YouTube requirements. Please re-validate the project.")
@@ -1172,9 +1253,12 @@ class VideoProcessor(QObject):
         current_time = 0.0
         for idx, slide in enumerate(model.slides):
             start_times.append(current_time)
-            current_time += slide.duration
+            quantized_duration = self._quantize_duration_for_fps(slide.duration, model.parameters.fps)
+            current_time += quantized_duration
             if idx < len(model.slides) - 1:
-                current_time += slide.interval_to_next
+                quantized_interval = self._quantize_duration_for_fps(slide.interval_to_next, model.parameters.fps)
+                current_time += quantized_interval
+
         total_duration_ms = int(current_time * 1000)
         with path.open('w', encoding='utf-8') as f:
             f.write(";FFMETADATA1\n")
