@@ -240,7 +240,7 @@ class MainWindow(QWidget):
         self.cancel_button.setEnabled(False)
 
     def on_encoder_test_finished(self, encoders_map, logs):
-        self.write_debug("\n--- Hardware Encoder Test Finished (Background) ---")
+        self.write_debug("[INFO] \n--- Hardware Encoder Test Finished (Background) ---")
         for log in logs:
             self.write_debug(log)
 
@@ -1008,7 +1008,7 @@ class MainWindow(QWidget):
                     if p.is_file() and p.suffix.lower() in config.SUPPORTED_FORMATS
                 ])
             except Exception as e:
-                self.write_debug(f"Error while rescanning material files: {e}")
+                self.write_debug(f"[ERROR] Error while rescanning material files: {e}")
 
     def check_for_updates(self):
         if self.__version__ == 'local-dev':
@@ -1211,7 +1211,7 @@ class MainWindow(QWidget):
         self.state_machine.transition_to(AppState.VALIDATED)
 
         if is_cancelling:
-             self.write_debug("Process was canceled.", 'app')
+             self.write_debug("[INFO] Process was canceled.", 'app')
 
     def _show_processing_result(self, success: bool, message: str, process_name: str):
         if success:
@@ -1406,9 +1406,19 @@ class MainWindow(QWidget):
                  self.state_machine.transition_to(AppState.PREPARE_TO_VALIDATE)
 
     def write_debug(self, text, source='app'):
-        is_verbose_app_log = (source == 'verbose_app')
+        color_map = {
+            '[FATAL]': QColor("red"),
+            '[ERROR]': QColor("red"),
+            '[WARNING]': QColor("orange"),
+            '[SUCCESS]': QColor("green"),
+            '[DEBUG]': QColor("blue"),
+            '[STATE_TRANSITION]': QColor("magenta"),
+        }
+        default_color = self.debug_text.palette().color(QPalette.ColorRole.Text)
+        ffmpeg_color = QColor("grey")
 
-        if (source == 'ffmpeg' or is_verbose_app_log) and not self.verbose_debug_checkbox.isChecked():
+        is_verbose_log = text.strip().startswith(('[DEBUG]', '[STATE_TRANSITION]'))
+        if (source == 'ffmpeg' or is_verbose_log) and not self.verbose_debug_checkbox.isChecked():
             return
 
         self.debug_text.moveCursor(QTextCursor.End)
@@ -1416,21 +1426,26 @@ class MainWindow(QWidget):
         char_format = QTextCharFormat()
         
         final_text = text
-        if source == 'app' or is_verbose_app_log:
+        log_color = default_color
+
+        if source == 'ffmpeg':
+            log_color = ffmpeg_color
+        else:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             final_text = f"[{timestamp}] {text}"
             
             stripped_text = text.strip()
-            if stripped_text.startswith(('[ERROR]', '[FATAL]')):
-                char_format.setForeground(QColor("red"))
-            elif stripped_text.startswith('[WARNING]'):
-                char_format.setForeground(QColor("blue"))
-            else:
-                char_format.setForeground(QColor("green"))
-
+            for prefix, color in color_map.items():
+                if stripped_text.startswith(prefix):
+                    log_color = color
+                    break
+        
+        char_format.setForeground(log_color)
         cursor.setCharFormat(char_format)
         cursor.insertText(final_text.rstrip() + '\n')
-        cursor.setCharFormat(QTextCharFormat())
+
+        default_format = QTextCharFormat()
+        cursor.setCharFormat(default_format)
 
     def update_progress_bar(self, value):
         self.progress_bar.setValue(value)
@@ -1455,7 +1470,7 @@ class MainWindow(QWidget):
                 try:
                     snapshot[entry.name] = self.validator._get_file_hash(entry)
                 except (IOError, OSError) as e:
-                    self.write_debug(f"Could not calculate hash for file {entry.name}: {e}")
+                    self.write_debug(f"[WARNING] Could not calculate hash for file {entry.name}: {e}")
                     snapshot[entry.name] = None
         return snapshot
 

@@ -127,7 +127,7 @@ class SettingsManager(QObject):
                 slide.video_scale = slide_settings.get("video_scale", config.DEFAULT_VIDEO_SCALE)
                 slide.video_effects = slide_settings.get("video_effects", [])
 
-        self.log_message.emit(f"[INFO] Successfully loaded project settings.", 'app')
+        self.log_message.emit(f"[SUCCESS] Successfully loaded project settings.", 'app')
         return project_model
 
     def save_project_settings(self, project_model: ProjectModel):
