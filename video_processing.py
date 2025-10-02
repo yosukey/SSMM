@@ -140,7 +140,7 @@ class VideoProcessor(QObject):
         if self._is_canceled:
             raise ProcessingCanceled("Operation was canceled before starting the process.")
 
-        self.log_message.emit(f"Running command: {' '.join(shlex.quote(str(arg)) for arg in command_list)}", 'app')
+        self.log_message.emit(f"[DEBUG] Running command: {' '.join(shlex.quote(str(arg)) for arg in command_list)}", 'app')
 
         process = QProcess()
         self.register_process(process)
@@ -213,7 +213,7 @@ class VideoProcessor(QObject):
                         self._run_logic(project_model, Path(temp_dir), temp_video_path)
                 else:
                     temp_dir = tempfile.mkdtemp(dir=output_dir, prefix="movie-temp-")
-                    self.log_message.emit(f"Temporary files are being kept in: {temp_dir}", 'app')
+                    self.log_message.emit(f"[INFO] Temporary files are being kept in: {temp_dir}", 'app')
                     self._run_logic(project_model, Path(temp_dir), temp_video_path)
 
                 if not self._is_canceled:
@@ -222,19 +222,20 @@ class VideoProcessor(QObject):
                     shutil.move(str(temp_video_path), str(final_video_path))
 
                     if project_model.parameters.export_youtube_chapters:
-                        self.log_message.emit("Generating YouTube chapter file...", 'app')
+                        self.log_message.emit("[INFO] Generating YouTube chapter file...", 'app')
                         try:
                             self._generate_youtube_chapter_file(project_model, final_video_path)
-                            self.log_message.emit("YouTube chapter file generated successfully.", 'app')
+                            self.log_message.emit("[SUCCESS] YouTube chapter file generated successfully.", 'app')
                         except Exception as chap_e:
                             self.log_message.emit(f"[ERROR] Could not generate YouTube chapter file: {chap_e}", 'app')
                     
+                    self.log_message.emit(f"[SUCCESS] Video created successfully at: {final_video_path}", 'app')
                     return (True, str(final_video_path))
 
             except ProcessingCanceled:
                 if temp_video_path.exists():
                     temp_video_path.unlink()
-                self.log_message.emit("Video creation was canceled by user.", 'app')
+                self.log_message.emit("[INFO] Video creation was canceled by user.", 'app')
                 return (False, "Canceled by user.")
             except Exception as e:
                 if temp_video_path.exists():
@@ -381,10 +382,11 @@ class VideoProcessor(QObject):
                     temp_dir_str = tempfile.mkdtemp(dir=output_dir, prefix="preview-temp-")
                     _run_in_temp_dir(Path(temp_dir_str))
                 
+                self.log_message.emit(f"[SUCCESS] Preview created successfully at: {final_preview_path}", 'app')
                 return (True, str(final_preview_path))
 
             except ProcessingCanceled:
-                self.log_message.emit("Preview creation was canceled by user.", 'app')
+                self.log_message.emit("[INFO] Preview creation was canceled by user.", 'app')
                 return (False, "Canceled by user.")
             except Exception as e:
                 self.log_message.emit(f"[ERROR] An exception occurred during preview creation: {e}", 'app')
@@ -400,7 +402,7 @@ class VideoProcessor(QObject):
         serial = f"{i+1:03d}"
         slide_video_path = output_path if output_path else slide_info[4] / f"slide_{serial}.mp4"
         
-        self.log_message.emit(f"Generating segment for slide {i+1}...", 'app')
+        self.log_message.emit(f"[INFO] Generating segment for slide {i+1}...", 'app')
         
         processor = SlideProcessorFactory.get_processor(self, slide_info, slide_video_path)
         processor.process()
@@ -495,7 +497,7 @@ class VideoProcessor(QObject):
             raise ProcessingCanceled()
 
         interval_video_path = temp_folder / f"interval_{i}.mp4"
-        self.log_message.emit(f"Generating transition between slide {i+1} and {i+2}...", 'app')
+        self.log_message.emit(f"[INFO] Generating transition between slide {i+1} and {i+2}...", 'app')
 
         self._create_transition_video(
             project_model,
@@ -565,14 +567,19 @@ class VideoProcessor(QObject):
                 if page.rect.width == 0:
                     raise Exception(f"PDF page {page_num + 1} has zero width.")
 
-                zoom = target_width / page.rect.width
-                matrix = fitz.Matrix(zoom, zoom)
-                
-                pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
-                
-                out_path = temp_folder / f"page_{page_num + 1:03d}.png"
-                pix.save(str(out_path))
-                image_paths_dict[page_num] = out_path
+                pix = None
+                try:
+                    zoom = target_width / page.rect.width
+                    matrix = fitz.Matrix(zoom, zoom)
+                    
+                    pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
+                    
+                    out_path = temp_folder / f"page_{page_num + 1:03d}.png"
+                    pix.save(str(out_path))
+                    image_paths_dict[page_num] = out_path
+                finally:
+                    if pix:
+                        del pix
 
         return image_paths_dict
 
@@ -730,7 +737,7 @@ class VideoProcessor(QObject):
             pass_log_prefix = str(output_path.with_suffix(''))
             null_device = "NUL" if sys.platform == "win32" else "/dev/null"
 
-            self.log_message.emit(f"Running 1st pass for {output_path.name}...", 'app')
+            self.log_message.emit(f"[INFO] Running 1st pass for {output_path.name}...", 'app')
             video_opts_1 = self._get_video_encoding_options(params, pass_num=1)
             
             pass1_opts = base_output_options + ['-c:v', codec] + video_opts_1 + ['-an', '-passlogfile', pass_log_prefix]
@@ -739,7 +746,7 @@ class VideoProcessor(QObject):
             self._run_subprocess(builder.build())
             if self._is_canceled: return
 
-            self.log_message.emit(f"Running 2nd pass for {output_path.name}...", 'app')
+            self.log_message.emit(f"[INFO] Running 2nd pass for {output_path.name}...", 'app')
             video_opts_2 = self._get_video_encoding_options(params, pass_num=2)
             audio_opts = self._get_common_audio_options(params)
             
@@ -748,7 +755,7 @@ class VideoProcessor(QObject):
             self._run_subprocess(builder.build())
 
         else:
-            self.log_message.emit(f"Running 1-pass encoding for {output_path.name}...", 'app')
+            self.log_message.emit(f"[INFO] Running 1-pass encoding for {output_path.name}...", 'app')
             video_opts = self._get_video_encoding_options(params, pass_num=1)
             audio_opts = self._get_common_audio_options(params)
             
@@ -1050,7 +1057,7 @@ class VideoProcessor(QObject):
             return float(output.strip())
 
         except Exception as e:
-            self.log_message.emit(f"Could not get media duration for '{media_path.name}': {e}", 'app')
+            self.log_message.emit(f"[ERROR] Could not get media duration for '{media_path.name}': {e}", 'app')
             return 0.0
             
     def _resolve_codec_option(self, codec, hw):
@@ -1281,4 +1288,4 @@ class VideoProcessor(QObject):
                 try:
                     path_obj.unlink()
                 except OSError as e:
-                    self.log_message.emit(f"Could not delete temp file {p}: {e}", 'app')
+                    self.log_message.emit(f"[WARNING] Could not delete temp file {p}: {e}", 'app')

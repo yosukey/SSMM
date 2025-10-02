@@ -28,6 +28,7 @@ class WorkerManager(QObject):
     _start_video_creation_signal = Signal(ProjectModel, bool)
     _start_preview_creation_signal = Signal(ProjectModel, int, Path, bool, bool)
     _cancel_video_processing_signal = Signal()
+    _cancel_transient_worker_signal = Signal()
 
 
     def __init__(self, parent=None):
@@ -68,6 +69,9 @@ class WorkerManager(QObject):
         self.current_transient_worker = worker_class(*worker_args)
         self.current_transient_worker.moveToThread(self.current_transient_thread)
         
+        if hasattr(self.current_transient_worker, 'cancel'):
+            self._cancel_transient_worker_signal.connect(self.current_transient_worker.cancel)
+
         terminal_signal_names = [
             'finished', 'error', 'canceled', 'validation_finished', 
             'validation_error', 'validation_canceled', 'project_setup_finished', 
@@ -89,6 +93,12 @@ class WorkerManager(QObject):
         self.current_transient_thread.start()
 
     def _clear_transient_references(self):
+        if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
+            try:
+                self._cancel_transient_worker_signal.disconnect(self.current_transient_worker.cancel)
+            except (TypeError, RuntimeError):
+                pass
+
         self.current_transient_thread = None
         self.current_transient_worker = None
         self.transient_worker_finished.emit()
@@ -131,6 +141,6 @@ class WorkerManager(QObject):
 
     def cancel_all_tasks(self):
         if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
-            self.current_transient_worker.cancel()
+            self._cancel_transient_worker_signal.emit()
         
         self._cancel_video_processing_signal.emit()
