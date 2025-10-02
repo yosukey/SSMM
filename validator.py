@@ -103,16 +103,21 @@ class ProjectValidator:
 
     def _render_pdf_page_for_preview(self, pdf_path: Path, page_num: int) -> Optional[Image.Image]:
         doc = None
+        pix = None
         try:
             doc = fitz.open(pdf_path)
             if 0 <= page_num < doc.page_count:
                 page = doc.load_page(page_num)
                 pix = page.get_pixmap(alpha=False)
-                return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                return img
         except Exception as e:
             self.log(f"[ERROR] Failed to render PDF page {page_num} for preview: {e}")
         finally:
-            if doc: doc.close()
+            if pix:
+                del pix
+            if doc:
+                doc.close()
         return None
 
     def clear_cache(self):
@@ -167,16 +172,21 @@ class ProjectValidator:
             for i, slide in enumerate(project_model.slides):
                 page = doc.load_page(i)
                 
-                zoom_factor = 2.0
-                matrix = fitz.Matrix(zoom_factor, zoom_factor)
-                pix = page.get_pixmap(matrix=matrix, alpha=False)
-                pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                pix = None
+                try:
+                    zoom_factor = 2.0
+                    matrix = fitz.Matrix(zoom_factor, zoom_factor)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                finally:
+                    if pix:
+                        del pix
                 
                 p_hash = imagehash.phash(pil_image)
                 slide.p_hash = str(p_hash)
                 
                 target_thumb_height = 300
-                thumbnail_size = (int(target_thumb_height * pix.width / pix.height), target_thumb_height)
+                thumbnail_size = (int(target_thumb_height * pil_image.width / pil_image.height), target_thumb_height)
                 thumbnail_image = pil_image.copy()
                 thumbnail_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
                 
@@ -207,16 +217,21 @@ class ProjectValidator:
             details["page_count"] = doc.page_count
 
             for page in doc:
-                zoom_factor = 2.0
-                matrix = fitz.Matrix(zoom_factor, zoom_factor)
-                pix = page.get_pixmap(matrix=matrix, alpha=False)
-                pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                pix = None
+                try:
+                    zoom_factor = 2.0
+                    matrix = fitz.Matrix(zoom_factor, zoom_factor)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                finally:
+                    if pix:
+                        del pix
 
                 p_hash = imagehash.phash(pil_image)
                 details["p_hashes"].append(str(p_hash))
 
                 target_thumb_height = 300
-                thumbnail_size = (int(target_thumb_height * pix.width / pix.height), target_thumb_height)
+                thumbnail_size = (int(target_thumb_height * pil_image.width / pil_image.height), target_thumb_height)
                 thumbnail_image = pil_image.copy()
                 thumbnail_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
 

@@ -1,5 +1,5 @@
 # workers.py
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 from pathlib import Path
 from models import ProjectModel
 from validator import ProjectValidator
@@ -77,6 +77,7 @@ class ValidationWorker(QObject):
         self.model = model
         self.encoders_map = encoders_map
 
+    @Slot()
     def cancel(self):
         self.log_message.emit("Validation cancellation requested.", "app")
         self.validator.cancel()
