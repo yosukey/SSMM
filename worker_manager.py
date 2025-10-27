@@ -6,7 +6,8 @@ from models import ProjectModel
 from video_processing import VideoProcessor
 from settings_manager import SettingsManager
 from validator import ProjectValidator
-from workers import EncoderTestWorker, ProjectSetupWorker, ValidationWorker
+from workers import (EncoderTestWorker, ProjectSetupWorker, ValidationWorker, 
+                     UpdateCheckWorker)
 
 
 class WorkerManager(QObject):
@@ -19,6 +20,7 @@ class WorkerManager(QObject):
     encoder_test_finished = Signal(object, object)
     project_setup_finished = Signal(ProjectModel)
     project_setup_error = Signal(str, str)
+    update_check_finished = Signal(str, str)
     
     progress_updated = Signal(int)
     log_message = Signal(str, str)
@@ -75,7 +77,7 @@ class WorkerManager(QObject):
         terminal_signal_names = [
             'finished', 'error', 'canceled', 'validation_finished', 
             'validation_error', 'validation_canceled', 'project_setup_finished', 
-            'project_setup_error', 'encoder_test_finished'
+            'project_setup_error', 'encoder_test_finished', 'update_check_finished'
         ]
 
         for signal_name, slot_or_signal in signals_to_slots.items():
@@ -131,6 +133,16 @@ class WorkerManager(QObject):
             worker_class=EncoderTestWorker,
             worker_args=(validator,),
             signals_to_slots={ 'finished': self.encoder_test_finished }
+        )
+
+    def start_update_check(self, current_version: str):
+        self._start_transient_worker(
+            worker_class=UpdateCheckWorker,
+            worker_args=(current_version,),
+            signals_to_slots={
+                'finished': self.update_check_finished,
+                'log_message': self.log_message
+            }
         )
 
     def start_video_creation(self, model: ProjectModel, is_verbose: bool):

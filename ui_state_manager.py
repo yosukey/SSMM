@@ -28,6 +28,7 @@ class UIStateManager:
         self.main_window.validation_button.setText(self.main_window.tr("Check Files"))
 
         status_message = ""
+        show_update_notification = False
         
         is_normalized = self.main_window.normalize_loudness_checkbox.isChecked()
         self.main_window.normalize_loudness_mode_label.setEnabled(is_normalized)
@@ -48,6 +49,7 @@ class UIStateManager:
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
             status_message = self.main_window.tr("Please select the project folder to begin.")
+            show_update_notification = True
         
         elif new_state == AppState.LOADING_PROJECT:
             self.main_window.show_gallery_action.setEnabled(True)
@@ -86,6 +88,7 @@ class UIStateManager:
                 status_message = self.main_window.tr("Settings have changed. Please click 'Check Files' to re-validate.")
             else:
                 status_message = self.main_window.tr("Ready to validate. Please click 'Check Files' to proceed.")
+            show_update_notification = True
 
         elif new_state == AppState.VALIDATING:
             self.main_window.cancel_button.setEnabled(True)
@@ -99,6 +102,7 @@ class UIStateManager:
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
             status_message = self.main_window.tr("Validation successful. Ready to create video.")
+            show_update_notification = True
 
         elif new_state == AppState.PROCESSING:
             self.main_window.cancel_button.setEnabled(True)
@@ -114,7 +118,33 @@ class UIStateManager:
             self.main_window.show_gallery_action.setEnabled(True)
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
+            show_update_notification = True
         
+        if show_update_notification and self.main_window.update_available:
+            update_text = self.main_window.tr("💡 New version v{0} available!").format(self.main_window.latest_version_tag)
+            status_message = f"{update_text} | {status_message}"
+            self.main_window.status_label.setStyleSheet("""
+                QLabel#statusLabel {
+                    background-color: #007bff; /* A blue color to indicate info */
+                    color: white;
+                    font-weight: bold;
+                    padding: 5px;
+                    border-radius: 4px;
+                    min-height: 25px;
+                }
+            """)
+        else:
+            self.main_window.status_label.setStyleSheet("""
+                QLabel#statusLabel {
+                    background-color: #d35400; /* Default color */
+                    color: white;
+                    font-weight: bold;
+                    padding: 5px;
+                    border-radius: 4px;
+                    min-height: 25px;
+                }
+            """)
+
         self.main_window.status_label.setText(status_message)
         self.main_window.status_label.setVisible(bool(status_message))
         self.main_window.validation_warning_label.setVisible(
