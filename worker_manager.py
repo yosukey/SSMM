@@ -75,8 +75,8 @@ class WorkerManager(QObject):
             self._cancel_transient_worker_signal.connect(self.current_transient_worker.cancel)
 
         terminal_signal_names = [
-            'finished', 'error', 'canceled', 'validation_finished', 
-            'validation_error', 'validation_canceled', 'project_setup_finished', 
+            'finished', 'error', 'canceled', 'validation_finished',
+            'validation_error', 'validation_canceled', 'project_setup_finished',
             'project_setup_error', 'encoder_test_finished', 'update_check_finished'
         ]
 
@@ -92,6 +92,7 @@ class WorkerManager(QObject):
         self.current_transient_thread.finished.connect(self.current_transient_thread.deleteLater)
         self.current_transient_thread.finished.connect(self._clear_transient_references)
 
+        self.log_message.emit(f"[DEBUG] Starting transient thread for worker: {worker_class.__name__}", 'app')
         self.current_transient_thread.start()
 
     def _clear_transient_references(self):
