@@ -7,6 +7,7 @@ from settings_manager import SettingsManager
 import config
 import json
 from urllib import request
+import traceback
 from packaging.version import parse as parse_version
 
 class EncoderTestWorker(QObject):
@@ -122,9 +123,12 @@ class UpdateCheckWorker(QObject):
 
     @Slot()
     def run(self):
+        self.log_message.emit("[DEBUG] UpdateCheckWorker started.", 'app')
+
         if self.current_version == 'local-dev':
             self.log_message.emit("[INFO] Skipping update check for local development version.", 'app')
             self.finished.emit("", "")
+            self.log_message.emit("[DEBUG] UpdateCheckWorker finished (skipped for local-dev).", 'app')
             return
             
         self.log_message.emit("[INFO] --- Checking for application updates (background) ---", 'app')
@@ -133,12 +137,16 @@ class UpdateCheckWorker(QObject):
         api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
 
         try:
+            self.log_message.emit(f"[DEBUG] Contacting GitHub API: {api_url}", 'app')
             req = request.Request(api_url, headers={'Accept': 'application/vnd.github.v3+json'})
-            with request.urlopen(req, timeout=5) as response:
+            with request.urlopen(req, timeout=10) as response:
+                self.log_message.emit(f"[DEBUG] GitHub API connection successful (Status: {response.status}). Reading response...", 'app')
                 if response.status != 200:
+                    self.log_message.emit(f"[ERROR] GitHub API returned non-200 status: {response.status}", 'app')
                     raise ConnectionError(f"GitHub API returned status {response.status}")
                 
                 data = json.loads(response.read().decode('utf-8'))
+                self.log_message.emit("[DEBUG] GitHub API response parsed successfully.", 'app')
                 latest_version_tag = data.get("tag_name", "v0.0.0").lstrip('v')
                 release_url = data.get("html_url", "")
 
@@ -152,5 +160,8 @@ class UpdateCheckWorker(QObject):
                 self.finished.emit(latest_version_tag, "") # Pass version to signal "latest"
         
         except Exception as e:
-            self.log_message.emit(f"[WARNING] Could not check for updates. Network issue? Error: {e}", 'app')
+            error_details = traceback.format_exc() # スタックトレースを取得
+            self.log_message.emit(f"[ERROR] Update check failed. Error: {e}\n{error_details}", 'app')
             self.finished.emit("", "")
+        finally:
+            self.log_message.emit("[DEBUG] UpdateCheckWorker finished.", 'app')
