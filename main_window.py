@@ -257,6 +257,7 @@ class MainWindow(QWidget):
 
         if not self.is_checking_updates:
             self.is_checking_updates = True
+            self.write_debug("[DEBUG] Attempting to start UpdateCheckWorker...", 'app')
             self.worker_manager.start_update_check(self.__version__)
 
         if self._project_path_on_startup and self._project_path_on_startup.exists():
