@@ -64,6 +64,7 @@ class WorkerManager(QObject):
 
     def _start_transient_worker(self, worker_class, worker_args: tuple, signals_to_slots: dict):
         if self.current_transient_thread and self.current_transient_thread.isRunning():
+            self.log_message.emit(f"[WARNING] Transient worker requested ({worker_class.__name__}) but another is already running.", 'app')
             self.transient_worker_busy.emit("A process is already running. Please wait for it to complete.")
             return
 
@@ -94,6 +95,7 @@ class WorkerManager(QObject):
 
         self.log_message.emit(f"[DEBUG] Starting transient thread for worker: {worker_class.__name__}", 'app')
         self.current_transient_thread.start()
+        self.log_message.emit(f"[DEBUG] Called start() for worker thread: {worker_class.__name__}", 'app')
 
     def _clear_transient_references(self):
         if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
