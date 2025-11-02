@@ -138,11 +138,6 @@ class MainWindow(QWidget):
         self._is_first_activation = True
         self._next_startup_action: Optional[Callable] = None
         
-        self.is_checking_updates = False
-        self.update_available = False
-        self.latest_version_tag = ""
-        self.update_release_url = ""
-        
         QApplication.instance().focusWindowChanged.connect(self.handle_focus_changed)
         
         self.settings_manager = SettingsManager(self)
@@ -254,11 +249,6 @@ class MainWindow(QWidget):
 
         self._populate_comboboxes()
         self._sync_model_to_ui()
-
-        if not self.is_checking_updates:
-            self.is_checking_updates = True
-            self.write_debug("[DEBUG] Attempting to start UpdateCheckWorker...", 'app')
-            self.worker_manager.start_update_check(self.__version__)
 
         if self._project_path_on_startup and self._project_path_on_startup.exists():
             self._next_startup_action = self._start_project_setup_from_startup_path
@@ -411,13 +401,14 @@ class MainWindow(QWidget):
         tools_menu.addAction(self.show_gallery_action)
         
         help_menu = menu_bar.addMenu(self.tr("&Help"))
+        
+        self.check_for_updates_action = QAction(self.tr("Check for &Updates..."), self)
+        self.check_for_updates_action.triggered.connect(self.check_for_updates)
+        help_menu.addAction(self.check_for_updates_action)
+        
         self.repository_action = QAction(self.tr("Visit Project Repository"), self)
         self.repository_action.triggered.connect(self._open_repository_url)
         help_menu.addAction(self.repository_action)
-
-        self.check_update_action = QAction(self.tr("Check for Updates..."), self)
-        self.check_update_action.triggered.connect(self._check_for_updates_clicked)
-        help_menu.addAction(self.check_update_action)
         
         return menu_bar
 
@@ -432,51 +423,6 @@ class MainWindow(QWidget):
     def _open_repository_url(self):
         url = QUrl(config.REPO_URL)
         QDesktopServices.openUrl(url)
-
-    def _on_update_check_finished(self, latest_version: str, release_url: str):
-        self.is_checking_updates = False
-        if latest_version and release_url:
-            self.write_debug(f"[INFO] Update check finished. New version found: {latest_version}")
-            self.update_available = True
-            self.latest_version_tag = latest_version
-            self.update_release_url = release_url
-            self.check_update_action.setText(self.tr("Update Available! (v{0})").format(latest_version))
-            self.ui_manager.update_ui_for_state(self.state_machine.state)
-        elif latest_version:
-            self.write_debug(f"[INFO] Update check finished. You are on the latest version ({latest_version}).")
-            self.update_available = False
-            self.latest_version_tag = latest_version
-            self.update_release_url = ""
-            self.check_update_action.setText(self.tr("Check for Updates..."))
-            self.ui_manager.update_ui_for_state(self.state_machine.state)
-        else:
-            self.write_debug("[INFO] Update check finished with no version info (likely network error).")
-            self.check_update_action.setText(self.tr("Check for Updates..."))
-
-    def _check_for_updates_clicked(self):
-        if self.update_available and self.update_release_url:
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle(self.tr("New Version Available"))
-            msg_box.setIcon(QMessageBox.Information)
-            msg_box.setText(
-                self.tr("A new version <b>{0}</b> has been released.<br><br>"
-                "You are currently running version {1}.").format(self.latest_version_tag, self.__version__)
-            )
-            msg_box.setInformativeText(
-                self.tr("It is recommended to update to the latest version.<br>"
-                "<a href='{0}'>Open Download Page</a>").format(self.update_release_url)
-            )
-            msg_box.setStandardButtons(QMessageBox.Ok)
-            msg_box.exec()
-        elif self.is_checking_updates:
-            QMessageBox.information(self, self.tr("Check for Updates"), self.tr("Already checking for updates..."))
-        elif self.latest_version_tag:
-             QMessageBox.information(self, self.tr("Check for Updates"), self.tr("You are running the latest version ({0}).").format(self.latest_version_tag))
-        else:
-            # Manual check
-            self.is_checking_updates = True
-            self.worker_manager.start_update_check(self.__version__)
-            QMessageBox.information(self, self.tr("Check for Updates"), self.tr("Checking for updates in the background..."))
 
     def _adjust_combo_box_view_width(self, combo_box: QComboBox):
         font_metrics = combo_box.fontMetrics()
@@ -635,8 +581,6 @@ class MainWindow(QWidget):
         self.worker_manager.validation_error.connect(self.on_validation_error)
         self.worker_manager.validation_canceled.connect(self.on_validation_canceled)
         self.worker_manager.transient_worker_finished.connect(self.on_transient_worker_finished)
-        self.worker_manager.update_check_finished.connect(self._on_update_check_finished)
-        
         param_widgets_on_change = [
             self.resolution_combo, self.fps_combo, self.hardware_encoding_combo, self.pass_combo,
             self.audio_bitrate_combo, self.audio_sample_rate_combo, self.audio_channels_combo,
@@ -1070,6 +1014,68 @@ class MainWindow(QWidget):
                 ])
             except Exception as e:
                 self.write_debug(f"[ERROR] Error while rescanning material files: {e}")
+
+    def check_for_updates(self):
+        if self.__version__ == 'local-dev':
+            self.write_debug("[INFO] Skipping update check for local development version.", 'app')
+            QMessageBox.information(self, self.tr("Update Check Skipped"), self.tr("Running in local-dev mode. Update check skipped."))
+            return
+
+        self.write_debug("[INFO] --- Manually checking for application updates ---", 'app')
+        repo_url = config.REPO_URL
+        repo_path = repo_url.replace("https://github.com/", "")
+        api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
+
+        try:
+            from packaging.version import parse as parse_version
+        except ImportError:
+            self.write_debug("[WARNING] 'packaging' library not found. Skipping update check. Please run 'pip install packaging'.", 'app')
+            QMessageBox.warning(self, self.tr("Check Failed"), self.tr("'packaging' library not found. Please run 'pip install packaging'."))
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        try:
+            # Access GitHub API (timeout set to 5 seconds)
+            req = request.Request(api_url, headers={'Accept': 'application/vnd.github.v3+json'})
+            with request.urlopen(req, timeout=5) as response:
+                if response.status != 200:
+                    raise ConnectionError(f"GitHub API returned status {response.status}")
+                
+                data = json.loads(response.read().decode('utf-8'))
+                latest_version_tag = data.get("tag_name", "v0.0.0").lstrip('v')
+                release_url = data.get("html_url", "")
+
+            self.write_debug(f"[INFO] Current version: {self.__version__}, Latest version on GitHub: {latest_version_tag}", 'app')
+
+            QApplication.restoreOverrideCursor()
+
+            # Compare versions
+            if parse_version(latest_version_tag) > parse_version(self.__version__):
+                self.write_debug(f"[INFO] New version {latest_version_tag} found!", 'app')
+                
+                # Show notification to the user
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle(self.tr("New Version Available"))
+                msg_box.setIcon(QMessageBox.Information)
+                msg_box.setText(
+                    self.tr("A new version <b>{0}</b> has been released.<br><br>"
+                    "You are currently running version {1}.").format(latest_version_tag, self.__version__)
+                )
+                msg_box.setInformativeText(
+                    self.tr("It is recommended to update to the latest version.<br>"
+                    "<a href='{0}'>Open Download Page</a>").format(release_url)
+                )
+                msg_box.setStandardButtons(QMessageBox.Ok)
+                msg_box.exec()
+            else:
+                self.write_debug("[INFO] You are running the latest version.", 'app')
+                QMessageBox.information(self, self.tr("No Updates Found"), self.tr("You are currently running the latest version ({0}).").format(self.__version__))
+
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.write_debug(f"[WARNING] Could not check for updates. This may be due to being offline or a network issue. Error: {e}", 'app')
+            QMessageBox.warning(self, self.tr("Update Check Failed"), self.tr("Could not check for updates. This may be due to being offline or a network issue.\n\nError: {0}").format(e))
 
     def run_validation(self):
         if not self._check_and_handle_pdf_changes():
