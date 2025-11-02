@@ -63,10 +63,6 @@ class WorkerManager(QObject):
             self.video_thread.wait(3000)
 
     def _start_transient_worker(self, worker_class, worker_args: tuple, signals_to_slots: dict):
-        if self.current_transient_thread and self.current_transient_thread.isRunning():
-            self.log_message.emit(f"[WARNING] Transient worker requested ({worker_class.__name__}) but another is already running.", 'app')
-            self.transient_worker_busy.emit("A process is already running. Please wait for it to complete.")
-            return
 
         self.current_transient_thread = QThread()
         self.current_transient_worker = worker_class(*worker_args)
