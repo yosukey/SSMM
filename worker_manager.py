@@ -27,7 +27,6 @@ class WorkerManager(QObject):
     
     _start_video_creation_signal = Signal(ProjectModel, bool)
     _start_preview_creation_signal = Signal(ProjectModel, int, Path, bool, bool)
-    _cancel_video_processing_signal = Signal()
     _cancel_transient_worker_signal = Signal()
 
 
@@ -51,7 +50,6 @@ class WorkerManager(QObject):
         
         self._start_video_creation_signal.connect(self.video_processor.start_video_creation)
         self._start_preview_creation_signal.connect(self.video_processor.start_preview_creation)
-        self._cancel_video_processing_signal.connect(self.video_processor.cancel)
 
         self.video_thread.start()
 
@@ -143,4 +141,5 @@ class WorkerManager(QObject):
         if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
             self._cancel_transient_worker_signal.emit()
         
-        self._cancel_video_processing_signal.emit()
+        if self.video_processor:
+            self.video_processor.cancel()
