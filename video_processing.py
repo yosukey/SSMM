@@ -86,12 +86,21 @@ class VideoProcessor(QObject):
     def __init__(self):
         super().__init__()
         self._is_canceled = False
+        self._is_canceled_lock = threading.Lock()
         self.active_processes = set()
         self.process_lock = threading.Lock()
         self.watermark_path: Path | None = None
         self._current_step = 0
         self._total_steps = 1
         self._is_verbose = False
+
+    def _set_canceled(self, value: bool):
+        with self._is_canceled_lock:
+            self._is_canceled = value
+
+    def _get_is_canceled(self) -> bool:
+        with self._is_canceled_lock:
+            return self._is_canceled
 
     def _quantize_duration_for_fps(self, duration: float, fps: int) -> float:
         if duration <= 0 or fps <= 0:
@@ -102,7 +111,7 @@ class VideoProcessor(QObject):
         return total_frames / fps
 
     def cancel(self):
-        self._is_canceled = True
+        self._set_canceled(True)
         
         procs_to_kill = []
         with self.process_lock:
@@ -112,18 +121,20 @@ class VideoProcessor(QObject):
             try:
                 if process.state() != QProcess.NotRunning:
                     process.kill()
-                    process.waitForFinished(5000)
             except Exception:
+                print(f"[WARNING] Failed to kill process during cancel.")
                 pass
             
     @Slot(ProjectModel, bool)
     def start_video_creation(self, project_model: ProjectModel, is_verbose: bool):
+        self._set_canceled(False)
         self._is_verbose = is_verbose
         success, message = self.run_video_creation(project_model)
         self.video_finished.emit(success, message)
 
     @Slot(ProjectModel, int, Path, bool, bool)
     def start_preview_creation(self, project_model: ProjectModel, slide_index: int, pdf_path: Path, is_verbose: bool, include_intervals: bool):
+        self._set_canceled(False)
         self._is_verbose = is_verbose
         success, message = self.run_preview_creation(project_model, slide_index, pdf_path, include_intervals)
         self.preview_finished.emit(success, message)
@@ -137,7 +148,7 @@ class VideoProcessor(QObject):
             self.active_processes.discard(process)
 
     def _run_subprocess(self, command_list: list[str], capture_output=False, timeout_sec=None):
-        if self._is_canceled:
+        if self._get_is_canceled():
             raise ProcessingCanceled("Operation was canceled before starting the process.")
 
         self.log_message.emit(f"[DEBUG] Running command: {' '.join(shlex.quote(str(arg)) for arg in command_list)}", 'app')
@@ -170,7 +181,10 @@ class VideoProcessor(QObject):
             handle_output()
             combined_output = "".join(output_chunks)
 
-            if self._is_canceled:
+            exit_code = process.exitCode()
+            exit_status = process.exitStatus()
+
+            if self._get_is_canceled() or exit_status == QProcess.CrashExit: # 変更
                 raise ProcessingCanceled()
 
             if not finished_normally:
@@ -179,9 +193,6 @@ class VideoProcessor(QObject):
                     process.waitForFinished(5000)
                 raise TimeoutError(f"Process timed out after {timeout_ms / 1000} seconds.")
 
-            exit_code = process.exitCode()
-            exit_status = process.exitStatus()
-            
             if exit_code != 0 or exit_status != QProcess.NormalExit:
                 error_string = process.errorString()
                 raise Exception(f"Command exited with status {exit_code} and error '{error_string}'.\nOutput:\n{combined_output}")
@@ -199,7 +210,6 @@ class VideoProcessor(QObject):
 
     def run_video_creation(self, project_model: ProjectModel):
         with SleepInhibitor(self.log_message.emit):
-            self._is_canceled = False
             self.watermark_path = None
             
             final_video_path = project_model.output_folder / f"{project_model.parameters.filename_input}.mp4"
@@ -247,7 +257,6 @@ class VideoProcessor(QObject):
 
     def run_preview_creation(self, project_model: ProjectModel, slide_index: int, pdf_path: Path, include_intervals: bool):
         with SleepInhibitor(self.log_message.emit):
-            self._is_canceled = False
             self.watermark_path = None
             
             base_filename = project_model.parameters.filename_input
