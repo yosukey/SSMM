@@ -23,13 +23,16 @@ ArchitecturesInstallIn64BitMode=x64
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
-LicenseFile=LICENSE_INSTALLER.txt
+; Paths below are relative to this script's directory (packaging\), so the
+; repo-root locations are referenced via "..\".
+LicenseFile=..\LICENSE_INSTALLER.txt
+OutputDir=..\Output
 OutputBaseFilename={#OutputName}-{#AppVersion}-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExeName}
-; SetupIconFile=assets\app_icon.ico
+; SetupIconFile=..\resources\assets\app_icon.ico
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -39,7 +42,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; The source path is now explicitly set to a directory created during the build workflow.
-Source: "dist_for_installer\SSMM\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist_for_installer\SSMM\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

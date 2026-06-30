@@ -1,6 +1,6 @@
 # slide_processor.py
 from pathlib import Path
-import config
+from ssmm import config
 
 class BaseSlideProcessor:
     def __init__(self, video_processor, slide_info: tuple, output_path: Path):

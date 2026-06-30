@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# PyInstaller / build output
+build/
+dist/
+dist_for_installer/
+*.spec
+
+# Third-party license notices (generated at build time by pip-licenses)
+resources/licenses/
+
+# Inno Setup installer output
+Output/
+
+# Packaged artifacts
+*.dmg
+SSMM-*-setup.exe
+SSMM-*-portable.exe
