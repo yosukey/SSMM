@@ -1,6 +1,7 @@
 # validator.py
 import base64
 import hashlib
+import html
 import io
 import json
 import platform
@@ -11,14 +12,16 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 
-import fitz
+from PySide6.QtCore import QCoreApplication
+
 import imagehash
 from PIL import Image
 
-import config
-from models import ProjectModel, ProjectParameters, Slide, ValidationMessages
-from ui_helpers import calculate_pinp_geometry, create_pinp_preview_for_report
-from utils import get_ffmpeg_path, get_ffprobe_path, get_ffmpeg_source
+from ssmm import config
+from ssmm import pdf_utils
+from ssmm.models import ProjectModel, ProjectParameters, Slide, ValidationMessages
+from ssmm.ui_helpers import calculate_pinp_geometry, create_pinp_preview_for_report
+from ssmm.utils import get_ffmpeg_path, get_ffprobe_path, get_ffmpeg_source
 
 try:
     from capabilities import load_capabilities
@@ -103,21 +106,14 @@ class ProjectValidator:
 
     def _render_pdf_page_for_preview(self, pdf_path: Path, page_num: int) -> Optional[Image.Image]:
         doc = None
-        pix = None
         try:
-            doc = fitz.open(pdf_path)
-            if 0 <= page_num < doc.page_count:
-                page = doc.load_page(page_num)
-                pix = page.get_pixmap(alpha=False)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                return img
+            doc = pdf_utils.open_pdf(pdf_path)
+            if 0 <= page_num < pdf_utils.num_pages(doc):
+                return pdf_utils.render_page_to_pil(doc, page_num)
         except Exception as e:
             self.log(f"[ERROR] Failed to render PDF page {page_num} for preview: {e}")
         finally:
-            if pix:
-                del pix
-            if doc:
-                doc.close()
+            pdf_utils.close_pdf(doc)
         return None
 
     def clear_cache(self):
@@ -130,17 +126,20 @@ class ProjectValidator:
 
     def _get_pdf_structure(self, pdf_path: Path) -> dict:
         structure = {'page_count': 0, 'page_dims': []}
+        doc = None
         try:
-            with fitz.open(pdf_path) as doc:
-                structure['page_count'] = doc.page_count
-                for page in doc:
-                    if self.is_canceled():
-                        return {}
-                    structure['page_dims'].append((page.rect.width, page.rect.height))
-                return structure
+            doc = pdf_utils.open_pdf(pdf_path)
+            structure['page_count'] = pdf_utils.num_pages(doc)
+            for i in range(structure['page_count']):
+                if self.is_canceled():
+                    return {}
+                structure['page_dims'].append(pdf_utils.page_size(doc, i))
+            return structure
         except Exception as e:
             self.log(f"[ERROR] Failed to get PDF structure for {pdf_path.name}: {e}")
             return {}
+        finally:
+            pdf_utils.close_pdf(doc)
 
     def cache_pdf_structure(self, pdf_path: Path):
         try:
@@ -164,24 +163,15 @@ class ProjectValidator:
 
         doc = None
         try:
-            doc = fitz.open(pdf_path)
-            if len(project_model.slides) != doc.page_count:
-                self.log(f"[ERROR] Slide count ({len(project_model.slides)}) mismatches PDF page count ({doc.page_count}). Aborting detail computation.")
+            doc = pdf_utils.open_pdf(pdf_path)
+            pdf_page_count = pdf_utils.num_pages(doc)
+            if len(project_model.slides) != pdf_page_count:
+                self.log(f"[ERROR] Slide count ({len(project_model.slides)}) mismatches PDF page count ({pdf_page_count}). Aborting detail computation.")
                 return
 
             for i, slide in enumerate(project_model.slides):
-                page = doc.load_page(i)
-                
-                pix = None
-                try:
-                    zoom_factor = 2.0
-                    matrix = fitz.Matrix(zoom_factor, zoom_factor)
-                    pix = page.get_pixmap(matrix=matrix, alpha=False)
-                    pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                finally:
-                    if pix:
-                        del pix
-                
+                pil_image = pdf_utils.render_page_to_pil(doc, i, scale=2.0)
+
                 p_hash = imagehash.phash(pil_image)
                 slide.p_hash = str(p_hash)
                 
@@ -199,8 +189,7 @@ class ProjectValidator:
         except Exception as e:
             self.log(f"[ERROR] Failed during PDF detail computation: {e}")
         finally:
-            if doc:
-                doc.close()
+            pdf_utils.close_pdf(doc)
 
     def get_pdf_details(self, pdf_path: Path) -> Tuple[Optional[dict], Optional[str]]:
         if not pdf_path or not pdf_path.exists():
@@ -213,19 +202,12 @@ class ProjectValidator:
         }
         doc = None
         try:
-            doc = fitz.open(pdf_path)
-            details["page_count"] = doc.page_count
+            doc = pdf_utils.open_pdf(pdf_path)
+            pdf_page_count = pdf_utils.num_pages(doc)
+            details["page_count"] = pdf_page_count
 
-            for page in doc:
-                pix = None
-                try:
-                    zoom_factor = 2.0
-                    matrix = fitz.Matrix(zoom_factor, zoom_factor)
-                    pix = page.get_pixmap(matrix=matrix, alpha=False)
-                    pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                finally:
-                    if pix:
-                        del pix
+            for i in range(pdf_page_count):
+                pil_image = pdf_utils.render_page_to_pil(doc, i, scale=2.0)
 
                 p_hash = imagehash.phash(pil_image)
                 details["p_hashes"].append(str(p_hash))
@@ -246,8 +228,7 @@ class ProjectValidator:
             self.log(f"[ERROR] {error_msg}")
             return None, error_msg
         finally:
-            if doc:
-                doc.close()
+            pdf_utils.close_pdf(doc)
 
     def probe_and_cache_all_materials(self, project_model: ProjectModel):
         if not project_model or not project_model.project_folder:
@@ -413,7 +394,10 @@ class ProjectValidator:
         if self._is_canceled: return messages, 0, file_hashes_snapshot
         self.log("[INFO] --- Phase 1/4: Checking FFmpeg installation ---")
         self._check_ffmpeg_installation(messages)
-        
+        # If FFmpeg was found but no functional encoder exists, surface that the build is unusable.
+        if not messages.has_errors():
+            self._check_functional_encoders(messages, available_encoders)
+
         if self._is_canceled: return messages, 0, file_hashes_snapshot
         self.log("[INFO] --- Phase 2/4: Analyzing PDF file ---")
 
@@ -421,7 +405,7 @@ class ProjectValidator:
         pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None) if project_model.project_folder else None
 
         if not pdf_path:
-            msg = (
+            msg = QCoreApplication.translate("ProjectValidator",
                 "No PDF file found in the project folder.<br><br>"
                 "<b>[Cause]</b><br>"
                 "The application requires exactly one PDF file in the selected project folder to serve as the base for the slideshow.<br><br>"
@@ -433,7 +417,7 @@ class ProjectValidator:
             current_pdf_hash = self._get_file_hash(pdf_path)
             current_pdf_structure = self._get_pdf_structure(pdf_path)
  
-            # Condition 1: PDF is completely unchanged (hash matches).
+            # Condition 1: PDF unchanged (hash matches).
             if self.validated_pdf_hash and self.validated_pdf_hash == current_pdf_hash:
                 self.log("[INFO] PDF file has not changed. Skipping detailed PDF analysis.")
                 page_count = len(project_model.slides)
@@ -442,7 +426,7 @@ class ProjectValidator:
             elif self.validated_pdf_hash and current_pdf_hash != self.validated_pdf_hash and len(project_model.slides) == current_pdf_structure.get('page_count', -1):
                 self.log("[INFO] PDF content changed without altering page structure. Updating thumbnails automatically.")
                 self.compute_and_populate_pdf_details(project_model)
-                msg = (
+                msg = QCoreApplication.translate("ProjectValidator",
                     "The PDF file was modified, but the page structure is the same.<br><br>"
                     "<b>[Note]</b><br>"
                     "Thumbnails in the 'Slide Settings' tab have been automatically updated to reflect the changes in the PDF content."
@@ -466,13 +450,13 @@ class ProjectValidator:
 
         unassigned_slides = [i + 1 for i, slide in enumerate(project_model.slides) if slide.filename is None]
         if unassigned_slides:
-            msg = (
-                f"Material has not been assigned for slide(s): {', '.join(map(str, unassigned_slides))}.<br><br>"
+            msg = QCoreApplication.translate("ProjectValidator",
+                "Material has not been assigned for slide(s): {0}.<br><br>"
                 "<b>[Cause]</b><br>"
                 "Every slide in the timeline must be assigned a video, an audio file, or explicitly marked as 'SILENT'.<br><br>"
                 "<b>[Action]</b><br>"
-                f"In the 'Slide Settings' tab, go to the specified slide row(s) and select a material from the dropdown menu. If a slide should only show the PDF page with no sound, select '{config.SILENT_MATERIAL_NAME}'."
-            )
+                "In the 'Slide Settings' tab, go to the specified slide row(s) and select a material from the dropdown menu. If a slide should only show the PDF page with no sound, select '{1}'."
+            ).format(', '.join(map(str, unassigned_slides)), config.SILENT_MATERIAL_NAME)
             messages.add_project_error(msg)
         
         if project_model.project_folder:
@@ -483,7 +467,7 @@ class ProjectValidator:
                     try:
                         file_hashes_snapshot[entry.name] = self._get_file_hash(entry)
                     except (IOError, OSError) as e:
-                        messages.add_project_warning(f"Could not create hash for file {entry.name}: {e}")
+                        messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "Could not create hash for file {0}: {1}").format(entry.name, e))
 
         if self._is_canceled: return messages, page_count, file_hashes_snapshot
 
@@ -539,7 +523,7 @@ class ProjectValidator:
             if project_model.project_folder:
                 effective_filename = project_model.project_folder.name
             else:
-                msg = (
+                msg = QCoreApplication.translate("ProjectValidator",
                     "The output filename is empty.<br><br>"
                     "<b>[Cause]</b><br>"
                     "An output filename is required. No project folder is set to use as a default name.<br><br>"
@@ -550,47 +534,47 @@ class ProjectValidator:
                 return
 
         if not effective_filename:
-            messages.add_project_error("The effective output filename is empty.")
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "The effective output filename is empty."))
             return
 
         control_chars_pattern = r'[\x00-\x1f\x7f]'
         if re.search(control_chars_pattern, effective_filename):
-            messages.add_project_error("The filename contains invisible control characters, which are not allowed.")
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "The filename contains invisible control characters, which are not allowed."))
             return
 
         for char in config.FILENAME_ILLEGAL_CHARS:
             if char in effective_filename:
-                msg = (
-                    f"The filename contains an illegal character: '{char}'<br><br>"
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "The filename contains an illegal character: '{0}'<br><br>"
                     "<b>[Cause]</b><br>"
-                    f"Operating systems do not allow the characters '{config.FILENAME_ILLEGAL_CHARS}' in filenames.<br><br>"
+                    "Operating systems do not allow the characters '{1}' in filenames.<br><br>"
                     "<b>[Action]</b><br>"
-                    f"Please remove the '{char}' character from the 'Filename' input box."
-                )
+                    "Please remove the '{2}' character from the 'Filename' input box."
+                ).format(char, config.FILENAME_ILLEGAL_CHARS, char)
                 messages.add_project_error(msg)
                 return
         
         if len(effective_filename.encode('utf-8')) > config.FILENAME_MAX_LENGTH:
-            msg = (
-                f"The filename is too long (max {config.FILENAME_MAX_LENGTH} bytes).<br><br>"
+            msg = QCoreApplication.translate("ProjectValidator",
+                "The filename is too long (max {0} bytes).<br><br>"
                 "<b>[Action]</b><br>"
                 "Please shorten the name in the 'Filename' input box."
-            )
+            ).format(config.FILENAME_MAX_LENGTH)
             messages.add_project_error(msg)
             return
 
         filename_base = effective_filename.split('.')[0]
         if filename_base.upper() in config.FILENAME_RESERVED_NAMES:
-            msg = (
-                f"The filename '{filename_base}' is a reserved system name.<br><br>"
+            msg = QCoreApplication.translate("ProjectValidator",
+                "The filename '{0}' is a reserved system name.<br><br>"
                 "<b>[Action]</b><br>"
                 "Please choose a different name in the 'Filename' input box."
-            )
+            ).format(filename_base)
             messages.add_project_error(msg)
             return
 
         if effective_filename.endswith('.') or effective_filename.endswith(' '):
-            messages.add_project_error("The filename cannot end with a period or a space.")
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "The filename cannot end with a period or a space."))
             return
 
     def _add_encoder_summary_notice(self, messages: ValidationMessages, available_encoders: dict):
@@ -634,7 +618,7 @@ class ProjectValidator:
             notice_html.append("<br>")
         
         if available_encoders:
-            notice_html.append("<b>Available Encoders (functional test passed):</b>")
+            notice_html.append(QCoreApplication.translate("ProjectValidator", "<b>Available Encoders (functional test passed):</b>"))
             
             headers = ['Codec', 'Software', 'NVIDIA', 'Intel', 'AMD', 'Apple VT']
             hw_map_keys = [None, 'NVIDIA', 'Intel', 'AMD', 'videotoolbox']
@@ -677,21 +661,21 @@ class ProjectValidator:
         if hardware_encoder_name is not None:
             target_encoder = config.CODEC_MAP.get(selected_codec, {}).get(hardware_encoder_name)
             if not target_encoder:
-                messages.add_project_error(f"Configuration error: No mapping found for codec '{selected_codec}' and hardware '{hardware_encoder_name}'.")
+                messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Configuration error: No mapping found for codec '{0}' and hardware '{1}'.").format(selected_codec, hardware_encoder_name))
                 return
 
             functional_encoders_for_codec = available_encoders.get(selected_codec, [])
             
             if target_encoder not in functional_encoders_for_codec:
-                msg = (
-                    f"The selected hardware encoder '{target_encoder}' is not functional.<br><br>"
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "The selected hardware encoder '{0}' is not functional.<br><br>"
                     "<b>[Cause]</b><br>"
                     "The application ran a quick test on the selected hardware encoder, and it failed to initialize. This is often caused by missing or outdated graphics drivers, or an unsupported hardware/FFmpeg combination.<br><br>"
                     "<b>[Action]</b><br>"
                     "  • Ensure your graphics drivers (NVIDIA, Intel, AMD) are up to date.<br>"
                     "  • In the 'Basic' tab, select 'None' for 'Hardware Encoding' to use reliable software encoding.<br>"
                     "  • Alternatively, try selecting a different Codec."
-                )
+                ).format(target_encoder)
                 messages.add_project_error(msg)
 
     def _add_slide_information(self, project_model: ProjectModel, messages: ValidationMessages):
@@ -704,15 +688,15 @@ class ProjectValidator:
 
             mf_path = project_model.project_folder / slide.filename
             if not mf_path.exists():
-                messages.add_project_error(f"Material file '{slide.filename}' not found in project folder.")
+                messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Material file '{0}' not found in project folder.").format(html.escape(slide.filename)))
                 slide.filename = None
                 continue
 
             try:
-                # Use the public method instead of the private one
+                # Use the public method (handles caching)
                 self.analyze_material(mf_path, slide)
             except Exception as e:
-                messages.add_project_error(f"Failed to process file '{slide.filename}': {e}")
+                messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Failed to process file '{0}': {1}").format(html.escape(slide.filename), html.escape(str(e))))
                 continue
         
         if project_model.project_folder:
@@ -722,12 +706,12 @@ class ProjectValidator:
                 if not mf_path.exists(): continue
 
                 try:
-                    # Use the public method, which also handles caching
+                    # Use the public method (handles caching)
                     self.analyze_material(mf_path, Slide())
                     
                     file_hash = self._get_file_hash(mf_path)
                     if not file_hash or file_hash not in self.info_cache:
-                        messages.add_file_warning(material_name, "Could not retrieve cached info for this file. It might be unreadable.")
+                        messages.add_file_warning(material_name, QCoreApplication.translate("ProjectValidator", "Could not retrieve cached info for this file. It might be unreadable."))
                         continue
 
                     cached_data = self.info_cache[file_hash]
@@ -741,7 +725,7 @@ class ProjectValidator:
                     else:
                         status_html = "<span class='status unused'>UNUSED</span> "
 
-                    header = f"{status_html}<b>{material_name}</b> ({'Audio' if not is_video else 'PinP Video'})"
+                    header = f"{status_html}<b>{html.escape(material_name)}</b> ({'Audio' if not is_video else 'PinP Video'})"
                     tech_info_html = [header]
                     if is_video:
                         w, h, codec, bitrate, fps, dar_str = tech_info.get('width'), tech_info.get('height'), tech_info.get('codec'), tech_info.get('bitrate'), tech_info.get('fps'), tech_info.get('dar')
@@ -758,7 +742,7 @@ class ProjectValidator:
                         tech_info_html.append(f"&nbsp;&nbsp;&nbsp;Video: {w}x{h}{dar_override_note}{rotation_note}, Codec: {codec}, Bitrate: {bitrate} kbps, FPS: {fps}")
                     audio_streams_info = cached_data.get('audio_streams', [])
                     if not audio_streams_info and not is_video:
-                        tech_info_html.append(f"&nbsp;&nbsp;&nbsp;No audio stream found.")
+                        tech_info_html.append("&nbsp;&nbsp;&nbsp;" + QCoreApplication.translate("ProjectValidator", "No audio stream found."))
                     
                     for i, audio_info in enumerate(audio_streams_info):
                         codec = audio_info.get('codec', 'N/A')
@@ -766,8 +750,8 @@ class ProjectValidator:
                         sample_rate = audio_info.get('sample_rate', 'N/A')
                         channels = audio_info.get('channels', '?')
                         layout = audio_info.get('channel_layout', 'N/A')
-                        lang = audio_info.get('language', 'unk')
-                        title = audio_info.get('title', '')
+                        lang = html.escape(str(audio_info.get('language', 'unk')))
+                        title = html.escape(str(audio_info.get('title', '')))
 
                         bitrate_display = f"{bitrate} kbps" if isinstance(bitrate, int) and bitrate > 0 else bitrate
                         desc_parts = [f"lang: {lang}"] if len(audio_streams_info) > 1 else []
@@ -782,7 +766,7 @@ class ProjectValidator:
 
                     messages.add_file_tech_info(material_name, tech_info_html)
                 except Exception as e:
-                    messages.add_file_warning(material_name, f"Could not generate report detail: {e}")
+                    messages.add_file_warning(material_name, QCoreApplication.translate("ProjectValidator", "Could not generate report detail: {0}").format(e))
 
     def _get_file_hash(self, file_path: Path) -> str:
         path_str = str(file_path.resolve())
@@ -826,70 +810,92 @@ class ProjectValidator:
             ffprobe_version = self._get_tool_version(ffprobe_path)
 
             if ffmpeg_version != "Error" and ffprobe_version != "Error" and ffmpeg_version != ffprobe_version:
-                msg = (
-                    f"FFmpeg version ({ffmpeg_version}) and ffprobe version ({ffprobe_version}) do not match.<br><br>"
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "FFmpeg version ({0}) and ffprobe version ({1}) do not match.<br><br>"
                     "<b>[Cause]</b><br>"
                     "The application found two different versions of FFmpeg tools on your system. Using mismatched versions can lead to unexpected errors during video processing.<br><br>"
                     "<b>[Action]</b><br>"
                     "It is highly recommended to install a matching pair of ffmpeg and ffprobe from the same official build to ensure stability."
-                )
+                ).format(ffmpeg_version, ffprobe_version)
                 messages.add_project_warning(msg)
         except FileNotFoundError as e:
             caps = load_capabilities()
             
-            base_message = f"FFmpeg was not found. This application requires a matching pair of ffmpeg and ffprobe to function."
-            
-            user_folder_tip = (
+            base_message = QCoreApplication.translate("ProjectValidator", "FFmpeg was not found. This application requires a matching pair of ffmpeg and ffprobe to function.")
+
+            user_folder_tip = QCoreApplication.translate("ProjectValidator",
                 "<b>[Option 1: Manual Install]</b><br>"
                 "Create a folder named 'ffmpeg-bin' in your user home directory and place both the ffmpeg and ffprobe executables inside it. The application will automatically detect them."
             )
 
             install_menu_tip = ""
             if caps.get("FFMPEG_INSTALL_MENU", True):
-                install_menu_tip = "<b>[Option 2: Automatic Install]</b><br>Use the 'Tools -> Install FFmpeg...' menu to let the application attempt a system-wide installation for you."
+                install_menu_tip = QCoreApplication.translate("ProjectValidator", "<b>[Option 2: Automatic Install]</b><br>Use the 'Tools -> Install FFmpeg...' menu to let the application attempt a system-wide installation for you.")
 
             full_message = "<br><br>".join(filter(None, [base_message, user_folder_tip, install_menu_tip]))
             messages.add_project_error(full_message)
 
+    def _check_functional_encoders(self, messages: ValidationMessages, available_encoders: dict):
+        # An empty map means no usable encoder was found for any codec, typically a broken or incompatible FFmpeg build.
+        if available_encoders:
+            return
+
+        msg = QCoreApplication.translate("ProjectValidator",
+            "FFmpeg was found, but no functional video encoder could be detected.<br><br>"
+            "<b>[Cause]</b><br>"
+            "The application tested the detected FFmpeg build, but none of the supported encoders "
+            "(such as libx264 or libx265) could be initialized. This usually means the build is "
+            "incomplete or incompatible -- for example, a wrong CPU architecture, a minimal build "
+            "without encoders, or an executable that lacks run permission.<br><br>"
+            "<b>[Action]</b><br>"
+            "  • Install a full FFmpeg build that includes the standard encoders.<br>"
+            "  • On macOS/Linux, ensure the ffmpeg and ffprobe files are executable.<br>"
+            "  • If you placed binaries in '~/ffmpeg-bin', verify they run correctly, then restart the application."
+        )
+        messages.add_project_error(msg)
+
     def _check_pdf_file(self, project_model: ProjectModel, messages: ValidationMessages, pdf_path: Path) -> int:
         page_count = 0
+        doc = None
         try:
-            with fitz.open(pdf_path) as doc:
-                page_count = doc.page_count
-                self.log(f"[INFO] PDF '{pdf_path.name}' has {page_count} pages.")
-                target_width, target_height = map(int, project_model.parameters.resolution.split('x'))
-                resolution_aspect_ratio = target_width / target_height
-                differing_pages = []
-                for page_num in range(page_count):
-                    if self._is_canceled: break
-                    self.log(f"Checking PDF page {page_num + 1} of {page_count} for aspect ratio...", source='verbose_app')
-                    page = doc.load_page(page_num)
-                    if page.rect.height == 0:
-                        messages.add_project_warning(f"PDF page {page_num + 1} has zero height and its aspect ratio cannot be checked.")
-                        continue
-                    if abs((page.rect.width / page.rect.height) - resolution_aspect_ratio) > config.PDF_ASPECT_RATIO_TOLERANCE:
-                        differing_pages.append(page_num + 1)
-                if differing_pages:
-                    pages_str = ', '.join(map(str, differing_pages))
-                    msg = (
-                        f"The aspect ratio of the PDF does not match the video resolution (on pages: {pages_str}).<br><br>"
-                        "<b>[Cause]</b><br>"
-                        "The shape (width-to-height ratio) of one or more PDF pages is different from the shape of the selected video resolution (e.g., a square PDF with a widescreen video setting).<br><br>"
-                        "<b>[Action]</b><br>"
-                        "You can either:<br>"
-                        "  • Go to the 'Basic' tab and change the 'Resolution' to one that matches the PDF's aspect ratio.<br>"
-                        "  • Edit the original PDF document to match your desired video aspect ratio.<br><br>"
-                        "<b>[Note]</b><br>"
-                        "If you proceed, black bars (padding) will be automatically added to the sides or top/bottom of the PDF images to make them fit the video frame."
-                    )
-                    messages.add_project_warning(msg)
+            doc = pdf_utils.open_pdf(pdf_path)
+            page_count = pdf_utils.num_pages(doc)
+            self.log(f"[INFO] PDF '{pdf_path.name}' has {page_count} pages.")
+            target_width, target_height = map(int, project_model.parameters.resolution.split('x'))
+            resolution_aspect_ratio = target_width / target_height
+            differing_pages = []
+            for page_num in range(page_count):
+                if self._is_canceled: break
+                self.log(f"Checking PDF page {page_num + 1} of {page_count} for aspect ratio...", source='verbose_app')
+                width, height = pdf_utils.page_size(doc, page_num)
+                if height == 0:
+                    messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "PDF page {0} has zero height and its aspect ratio cannot be checked.").format(page_num + 1))
+                    continue
+                if abs((width / height) - resolution_aspect_ratio) > config.PDF_ASPECT_RATIO_TOLERANCE:
+                    differing_pages.append(page_num + 1)
+            if differing_pages:
+                pages_str = ', '.join(map(str, differing_pages))
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "The aspect ratio of the PDF does not match the video resolution (on pages: {0}).<br><br>"
+                    "<b>[Cause]</b><br>"
+                    "The shape (width-to-height ratio) of one or more PDF pages is different from the shape of the selected video resolution (e.g., a square PDF with a widescreen video setting).<br><br>"
+                    "<b>[Action]</b><br>"
+                    "You can either:<br>"
+                    "  • Go to the 'Basic' tab and change the 'Resolution' to one that matches the PDF's aspect ratio.<br>"
+                    "  • Edit the original PDF document to match your desired video aspect ratio.<br><br>"
+                    "<b>[Note]</b><br>"
+                    "If you proceed, black bars (padding) will be automatically added to the sides or top/bottom of the PDF images to make them fit the video frame."
+                ).format(pages_str)
+                messages.add_project_warning(msg)
         except Exception as e:
-            messages.add_project_error(f"Failed to open or process PDF file: {pdf_path.name}. Error: {e}")
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Failed to open or process PDF file: {0}. Error: {1}").format(pdf_path.name, e))
+        finally:
+            pdf_utils.close_pdf(doc)
         return page_count
 
     def _check_parameter_compatibility(self, params: "ProjectParameters", messages: ValidationMessages):
         if params.hardware_encoding == 'videotoolbox' and params.encoding_mode == config.ENCODING_MODES["QUALITY"]:
-            msg = (
+            msg = QCoreApplication.translate("ProjectValidator",
                 "Incompatible settings: Apple VideoToolbox does not support Quality (CRF/CQP) mode.<br><br>"
                 "<b>[Cause]</b><br>"
                 "The selected hardware encoder ('Enabled (Apple Hardware)' on the 'Basic' tab) does not work with the 'Quality (CQP/CRF)' setting on the 'Video Options' tab.<br><br>"
@@ -900,7 +906,7 @@ class ProjectValidator:
 
     def _validate_youtube_chapters(self, project_model: ProjectModel, messages: ValidationMessages):
         if not any(s.chapter_title for s in project_model.slides):
-            msg = (
+            msg = QCoreApplication.translate("ProjectValidator",
                 "YouTube chapter export is enabled, but no chapters have been set.<br><br>"
                 "<b>[Cause]</b><br>"
                 "The 'Export chapter file for YouTube' option is checked in the 'Video Options' tab, but no chapter titles have been entered in the 'Slide Settings' tab.<br><br>"
@@ -921,7 +927,7 @@ class ProjectValidator:
                 current_time += slide.interval_to_next
 
         if not chapters or chapters[0]['start_time'] != 0.0:
-            msg = (
+            msg = QCoreApplication.translate("ProjectValidator",
                 "YouTube chapters must start from the beginning of the video (Slide 1).<br><br>"
                 "<b>[Cause]</b><br>"
                 "YouTube requires the first chapter to have a timestamp of 00:00. This means Slide 1 must have a chapter title.<br><br>"
@@ -931,26 +937,26 @@ class ProjectValidator:
             messages.add_project_error(msg)
 
         if len(chapters) < 3:
-            msg = (
-                f"YouTube requires at least 3 chapters, but only {len(chapters)} were found.<br><br>"
+            msg = QCoreApplication.translate("ProjectValidator",
+                "YouTube requires at least 3 chapters, but only {0} were found.<br><br>"
                 "<b>[Cause]</b><br>"
                 "To be considered a valid chapter list, YouTube's policy requires a minimum of three chapter entries.<br><br>"
                 "<b>[Action]</b><br>"
                 "Please add more chapter titles in the 'Slide Settings' tab until you have at least three."
-            )
+            ).format(len(chapters))
             messages.add_project_error(msg)
 
         for i in range(len(chapters)):
             duration = (chapters[i+1]['start_time'] if i + 1 < len(chapters) else current_time) - chapters[i]['start_time']
             if duration < 10.0:
                 chap_info = chapters[i]
-                msg = (
-                    f"The chapter '{chap_info['title']}' (on Slide {chap_info['slide_num']}) is only {duration:.1f} seconds long.<br><br>"
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "The chapter '{0}' (on Slide {1}) is only {2:.1f} seconds long.<br><br>"
                     "<b>[Cause]</b><br>"
                     "YouTube requires each chapter to be a minimum of 10 seconds long.<br><br>"
                     "<b>[Action]</b><br>"
                     "To make this chapter longer, you can increase the 'Duration' or 'Interval to Next' of the slide(s) it contains, or merge it with an adjacent chapter by removing its title."
-                )
+                ).format(html.escape(chap_info['title']), chap_info['slide_num'], duration)
                 messages.add_project_error(msg)
 
     def _check_warnings_and_additional_conditions(self, project_model: ProjectModel, messages: ValidationMessages, pdf_path: Optional[Path]):
@@ -968,11 +974,11 @@ class ProjectValidator:
         for filename, slide_usages in slides_by_filename.items():
             first_slide = slide_usages[0][1]
             if first_slide.tech_info.get('is_vfr'):
-                messages.add_file_warning(filename, "This is a Variable Frame Rate (VFR) video. It will be automatically converted to a constant frame rate to prevent sync issues, but please check the final output carefully.")
+                messages.add_file_warning(filename, QCoreApplication.translate("ProjectValidator", "This is a Variable Frame Rate (VFR) video. It will be automatically converted to a constant frame rate to prevent sync issues, but please check the final output carefully."))
             if first_slide.tech_info.get('is_interlaced'):
-                messages.add_file_notice(filename, "This video appears to be interlaced. It will be automatically deinterlaced for smooth playback.")
-            if first_slide.tech_info.get('rotate') in ["90", "270"]:
-                messages.add_file_notice(filename, "This is a vertical video and will be automatically rotated to the correct orientation.")
+                messages.add_file_notice(filename, QCoreApplication.translate("ProjectValidator", "This video appears to be interlaced. It will be automatically deinterlaced for smooth playback."))
+            if first_slide.tech_info.get('rotate') in ["90", "270", "-90"]:
+                messages.add_file_notice(filename, QCoreApplication.translate("ProjectValidator", "This is a vertical video and will be automatically rotated to the correct orientation."))
             
             w, h, dar_str = first_slide.tech_info.get('width', 0), first_slide.tech_info.get('height', 0), first_slide.tech_info.get('dar')
             if w > 0 and h > 0 and dar_str and ':' in dar_str and dar_str != '0:1':
@@ -987,37 +993,37 @@ class ProjectValidator:
                 
                 usage_warnings = []
                 if slide.tech_info.get('fps', 0) > (params.fps * 1.1):
-                    usage_warnings.append(f"Source FPS ({slide.tech_info.get('fps')}) is higher than the output FPS ({params.fps}). This may result in less smooth motion as frames will be dropped.")
+                    usage_warnings.append(QCoreApplication.translate("ProjectValidator", "Source FPS ({0}) is higher than the output FPS ({1}). This may result in less smooth motion as frames will be dropped.").format(slide.tech_info.get('fps'), params.fps))
                 if pinp_geometry['height'] > slide.tech_info.get('height', 0):
-                    usage_warnings.append(f"This video will be upscaled from {slide.tech_info.get('height', 0)}px to {round(pinp_geometry['height'])}px height, which may reduce its visual quality.")
+                    usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be upscaled from {0}px to {1}px height, which may reduce its visual quality.").format(slide.tech_info.get('height', 0), round(pinp_geometry['height'])))
                 if pinp_geometry['width'] > output_width:
-                    usage_warnings.append(f"This video will be scaled to {round(pinp_geometry['width'])}px width, which is wider than the output frame ({output_width}px).")
+                    usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be scaled to {0}px width, which is wider than the output frame ({1}px).").format(round(pinp_geometry['width']), output_width))
                 
                 base_image = self._render_pdf_page_for_preview(pdf_path, slide_index) if pdf_path else None
                 base64_image = create_pinp_preview_for_report(base_image, slide, output_width, output_height)
                 messages.add_file_usage_summary(filename, slide_index, pinp_geometry, slide, base64_image, usage_warnings)
 
         if dar_override_in_use:
-            messages.add_project_notice("<i>Note: Some Picture-in-Picture previews may look stretched. This is to accurately reflect the Display Aspect Ratio (DAR/SAR) metadata from the source file, which prevents distortion in the final video.</i>")
+            messages.add_project_notice(QCoreApplication.translate("ProjectValidator", "<i>Note: Some Picture-in-Picture previews may look stretched. This is to accurately reflect the Display Aspect Ratio (DAR/SAR) metadata from the source file, which prevents distortion in the final video.</i>"))
 
         for idx, slide in enumerate(project_model.slides[:-1]):
             if self._is_canceled: break
             if slide.interval_to_next <= 0 and slide.transition_to_next != "None":
-                msg = (
-                    f"Slide {idx + 1} ('{slide.filename or 'SILENT'}') has a transition with zero interval.<br><br>"
+                msg = QCoreApplication.translate("ProjectValidator",
+                    "Slide {0} ('{1}') has a transition with zero interval.<br><br>"
                     "<b>[Cause]</b><br>"
                     "A transition effect (e.g., 'Fade') has been selected, but the time allocated for it ('Interval to Next') is 0 seconds.<br><br>"
                     "<b>[Action]</b><br>"
                     "In the 'Slide Settings' tab for this slide, either increase the 'Interval to Next' to a value greater than 0 (e.g., 1 second) or set the 'Transition to Next' back to 'None'."
-                )
+                ).format(idx + 1, html.escape(slide.filename or 'SILENT'))
                 messages.add_project_error(msg)
         
         if params.codec in ['H.265/HEVC', 'AV1'] and params.hardware_encoding is None:
-            msg = (
-                f"Encoding with the {params.codec} codec in software mode may be significantly slower than H.264.<br><br>"
+            msg = QCoreApplication.translate("ProjectValidator",
+                "Encoding with the {0} codec in software mode may be significantly slower than H.264.<br><br>"
                 "<b>[Note]</b><br>"
                 "This is not an error. It's an advisory that video creation may take longer. Using hardware encoding, if available, can speed this up."
-            )
+            ).format(params.codec)
             messages.add_project_notice(msg)
 
     def _get_media_info(self, media_path: Path):
@@ -1081,7 +1087,8 @@ class ProjectValidator:
                     except (ValueError, ZeroDivisionError):
                         avg_fps = 0.0
 
-                    is_vfr = abs(r_fps - avg_fps) > 0.01
+                    # Use a relative tolerance so standard NTSC rates are not misreported as VFR.
+                    is_vfr = avg_fps > 0 and (abs(r_fps - avg_fps) / avg_fps) > 0.01
 
                     field_order = stream.get('field_order')
                     is_interlaced = field_order in ['tt', 'bb', 'tb', 'bt']
@@ -1152,7 +1159,7 @@ class ProjectValidator:
             return duration, video_info, audio_streams
         except subprocess.TimeoutExpired:
             raise ValueError(f"ffprobe timed out while analyzing '{media_path.name}'. The file may be corrupt or on a slow network drive.")
-        except (json.JSONDecodeError, IndexError, KeyError, ValueError) as e:
+        except (json.JSONDecodeError, IndexError, KeyError, ValueError, TypeError) as e:
             if isinstance(e, ValueError) and ("ffprobe failed" in str(e) or "ffprobe returned no output" in str(e)):
                 raise
             raise ValueError(f"Failed to parse ffprobe JSON output for '{media_path.name}'.")

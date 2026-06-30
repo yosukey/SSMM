@@ -1,6 +1,6 @@
 # ffmpeg_builder.py
 from pathlib import Path
-from utils import get_ffmpeg_path
+from ssmm.utils import get_ffmpeg_path
 
 class FFmpegCommandBuilder:
     def __init__(self):

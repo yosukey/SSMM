@@ -2,11 +2,11 @@
 from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
-from models import ProjectModel
-from video_processing import VideoProcessor
-from settings_manager import SettingsManager
-from validator import ProjectValidator
-from workers import EncoderTestWorker, ProjectSetupWorker, ValidationWorker
+from ssmm.models import ProjectModel
+from ssmm.video_processing import VideoProcessor
+from ssmm.settings_manager import SettingsManager
+from ssmm.validator import ProjectValidator
+from ssmm.workers import EncoderTestWorker, ProjectSetupWorker, ValidationWorker
 
 
 class WorkerManager(QObject):
@@ -56,7 +56,21 @@ class WorkerManager(QObject):
     def shutdown_persistent_workers(self):
         if self.video_thread:
             self.video_thread.quit()
-            self.video_thread.wait(3000)
+            # cancel_all_tasks() should already have killed any running ffmpeg so the
+            # worker slot unwinds quickly. If it still does not stop in time, fall back to
+            # terminate() so the QThread is not destroyed while it is still running.
+            if not self.video_thread.wait(5000):
+                self.video_thread.terminate()
+                self.video_thread.wait()
+
+    def shutdown_transient_worker(self, timeout_ms: int = 5000):
+        # Stop any in-flight transient worker before the owning window is destroyed.
+        thread = self.current_transient_thread
+        if thread and thread.isRunning():
+            thread.quit()
+            if not thread.wait(timeout_ms):
+                thread.terminate()
+                thread.wait()
 
     def _start_transient_worker(self, worker_class, worker_args: tuple, signals_to_slots: dict):
         if self.current_transient_thread and self.current_transient_thread.isRunning():
@@ -91,11 +105,13 @@ class WorkerManager(QObject):
         self.current_transient_thread.start()
 
     def _clear_transient_references(self):
-        if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
-            try:
-                self._cancel_transient_worker_signal.disconnect(self.current_transient_worker.cancel)
-            except (TypeError, RuntimeError):
-                pass
+        # Runs on QThread.finished, when the worker's C++ object may already be deleted.
+        # Disconnect the cancel relay rather than referencing the worker directly.
+        try:
+            self._cancel_transient_worker_signal.disconnect()
+        except (TypeError, RuntimeError):
+            # Raised when nothing is connected or the connection is already torn down.
+            pass
 
         self.current_transient_thread = None
         self.current_transient_worker = None

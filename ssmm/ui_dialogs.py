@@ -1,16 +1,22 @@
 # ui_dialogs.py
 import base64
 import imagehash
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QSpinBox, 
-                               QDialogButtonBox, QGroupBox, QFormLayout, QComboBox, 
+from pathlib import Path
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QSpinBox,
+                               QDialogButtonBox, QGroupBox, QFormLayout, QComboBox,
                                QCheckBox, QWidget, QHBoxLayout, QScrollArea, QPushButton,
-                               QTableWidget, QTableWidgetItem, QHeaderView, QStyle)
-from PySide6.QtCore import Qt, QPoint, Slot
+                               QTableWidget, QTableWidgetItem, QHeaderView, QStyle, QMessageBox,
+                               QSlider, QToolButton)
+from PySide6.QtCore import Qt, QPoint, Slot, Signal, QUrl, QSize
 from PySide6.QtGui import (QTextCursor, QPixmap, QImage, QPainter, QFont, QColor, QPen,
-                           QPainterPath)
+                           QPainterPath, QGuiApplication, QIcon, QPalette)
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimediaWidgets import QVideoWidget
 
-import config
-from models import Slide
+from ssmm import config
+from ssmm.models import Slide
+from ssmm.ui_main import wrap_cell_widget
+from ssmm.ui_helpers import generate_waveform_pixmap
 
 COL_NEW_THUMB = 0
 COL_SOURCE_COMBO = 1
@@ -47,6 +53,9 @@ class InstallProgressDialog(QDialog):
 class SelectSlideDialog(QDialog):
     def __init__(self, max_slides, parent=None):
         super().__init__(parent)
+        # Free the dialog once closed; deleteLater defers until the event loop,
+        # so reading values right after exec() is safe.
+        self.finished.connect(self.deleteLater)
         self.setWindowTitle(self.tr("Select Slide for Preview"))
         
         layout = QVBoxLayout(self)
@@ -92,6 +101,7 @@ class SelectSlideDialog(QDialog):
 class PageMappingDialog(QDialog): 
     def __init__(self, old_slides: list[Slide], new_pdf_info: dict, parent=None):
         super().__init__(parent)
+        self.finished.connect(self.deleteLater)
         self.setWindowTitle(self.tr("Map Slide Settings to New PDF Structure"))
         self.setFixedSize(850, 700)
 
@@ -174,27 +184,29 @@ class PageMappingDialog(QDialog):
     def _create_initial_mapping(self) -> dict:
         mapping = {}
         used_old_indices = set()
-        
-        old_ihashes = [imagehash.hex_to_hash(h) for h in self.old_hashes if h]
-        new_ihashes = [imagehash.hex_to_hash(h) for h in self.new_hashes if h]
 
-        for i, new_hash in enumerate(new_ihashes):
+        # Pair each parsed hash with its original page index so skipped hashless
+        # pages don't renumber the indices used for mapping.
+        old_ihashes = [(j, imagehash.hex_to_hash(h)) for j, h in enumerate(self.old_hashes) if h]
+        new_ihashes = [(i, imagehash.hex_to_hash(h)) for i, h in enumerate(self.new_hashes) if h]
+
+        for new_idx, new_hash in new_ihashes:
             best_match_idx = -1
             min_dist = config.HAMMING_DISTANCE_THRESHOLD + 1
 
-            for j, old_hash in enumerate(old_ihashes):
-                if j in used_old_indices:
+            for old_idx, old_hash in old_ihashes:
+                if old_idx in used_old_indices:
                     continue
-                
+
                 dist = new_hash - old_hash
                 if dist < min_dist:
                     min_dist = dist
-                    best_match_idx = j
-            
+                    best_match_idx = old_idx
+
             if min_dist <= config.HAMMING_DISTANCE_THRESHOLD:
-                mapping[i] = best_match_idx
+                mapping[new_idx] = best_match_idx
                 used_old_indices.add(best_match_idx)
-        
+
         return mapping
 
     def _get_material_display_info(self, slide: Slide) -> tuple[str, str]:
@@ -212,10 +224,12 @@ class PageMappingDialog(QDialog):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels([self.tr("New Page Thumbnail"), self.tr("Apply Settings From"), self.tr("Source Thumbnail"), self.tr("Source Info")])
         self.table.setRowCount(self.new_pdf_info["page_count"])
+        # Direct combo references, since wrapped combos aren't returned by cellWidget().
+        self.source_combos = {}
 
         for i in range(self.new_pdf_info["page_count"]):
 
-            # Column 0: New Page Thumbnail (Unchanged)
+            # Column 0: new page thumbnail
             if i in self.new_pixmaps:
                 numbered_thumb = self._create_numbered_thumbnail(self.new_pixmaps[i], i + 1)
                 thumb_label = QLabel()
@@ -223,7 +237,7 @@ class PageMappingDialog(QDialog):
                 thumb_label.setAlignment(Qt.AlignCenter)
                 self.table.setCellWidget(i, COL_NEW_THUMB, thumb_label)
 
-            # Column 1: Source Selection ComboBox with rich text
+            # Column 1: source selection combo box
             combo = QComboBox()
             combo.addItem(self.tr("Unmapped (New Page)"), userData=None)
             for j, old_slide in enumerate(self.old_slides):
@@ -233,20 +247,21 @@ class PageMappingDialog(QDialog):
                     display_text += f" {material_name}"
                 combo.addItem(display_text, userData=j)
             combo.currentIndexChanged.connect(lambda index, row=i: self._on_source_changed(row, index))
-            self.table.setCellWidget(i, COL_SOURCE_COMBO, combo)
+            self.source_combos[i] = combo
+            self.table.setCellWidget(i, COL_SOURCE_COMBO, wrap_cell_widget(combo))
             
-            # Column 2: Source Thumbnail (initially empty)
+            # Column 2: source thumbnail
             source_thumb_label = QLabel()
             source_thumb_label.setAlignment(Qt.AlignCenter)
             self.table.setCellWidget(i, COL_SOURCE_THUMB, source_thumb_label)
 
-            # Column 3: Source Info Label (initially empty)
+            # Column 3: source info label
             source_info_label = QLabel()
             source_info_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             source_info_label.setWordWrap(True)
             self.table.setCellWidget(i, COL_SOURCE_INFO, source_info_label)
             
-            # Set initial mapping value and trigger the first update
+            # Apply the initial mapping and trigger the first update
             mapped_old_idx = self.initial_mapping.get(i)
             if mapped_old_idx is not None:
                 combo.setCurrentIndex(combo.findData(mapped_old_idx))
@@ -264,10 +279,12 @@ class PageMappingDialog(QDialog):
         self.table.setColumnWidth(COL_SOURCE_INFO, 200)
         
         self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
 
     @Slot(int, int)
     def _on_source_changed(self, row: int, combo_index: int):
-        combo = self.table.cellWidget(row, COL_SOURCE_COMBO)
+        combo = self.source_combos.get(row)
         source_thumb_label = self.table.cellWidget(row, COL_SOURCE_THUMB)
         source_info_label = self.table.cellWidget(row, COL_SOURCE_INFO)
         
@@ -300,7 +317,7 @@ class PageMappingDialog(QDialog):
     def get_mapping(self) -> dict:
         mapping = {}
         for i in range(self.table.rowCount()):
-            combo = self.table.cellWidget(i, COL_SOURCE_COMBO)
+            combo = self.source_combos.get(i)
             if combo:
                 old_idx = combo.currentData()
                 mapping[i] = old_idx
@@ -310,6 +327,7 @@ class PageMappingDialog(QDialog):
 class EditEffectsDialog(QDialog):
     def __init__(self, current_effects, parent=None):
         super().__init__(parent)
+        self.finished.connect(self.deleteLater)
         self.setWindowTitle(self.tr("Select PinP Effects"))
         main_layout = QVBoxLayout(self)
 
@@ -405,7 +423,8 @@ class EditEffectsDialog(QDialog):
 class EditSlidesDialog(QDialog):
     def __init__(self, slide_info_list, has_video_slides, is_mixed_selection, is_only_last_slide_selected, parent=None):
         super().__init__(parent)
-        
+        self.finished.connect(self.deleteLater)
+
         slide_numbers = [s["number"] for s in slide_info_list]
         self.setWindowTitle(self.tr("Edit Selected Slides ({0} items)").format(len(slide_numbers)))
         self.setMinimumWidth(400)
@@ -544,3 +563,252 @@ class EditSlidesDialog(QDialog):
                 elif key == "video_effects":
                     changes[key] = self.selected_effects
         return changes
+
+
+class SlidePreviewDialog(QDialog):
+    def __init__(self, page_pixmap, slide_number, parent=None):
+        super().__init__(parent)
+        self.finished.connect(self.deleteLater)
+        self.setWindowTitle(self.tr("Slide {n} Preview").format(n=slide_number))
+
+        layout = QVBoxLayout(self)
+
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        if page_pixmap and not page_pixmap.isNull():
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            avail = screen.availableGeometry()
+            max_w = int(avail.width() * 0.9)
+            max_h = int(avail.height() * 0.85)
+            display_pixmap = page_pixmap
+            if page_pixmap.width() > max_w or page_pixmap.height() > max_h:
+                display_pixmap = page_pixmap.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            image_label.setPixmap(display_pixmap)
+        else:
+            image_label.setText(self.tr("Preview is not available for this slide."))
+        layout.addWidget(image_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Close)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+
+class WaveformWidget(QWidget):
+    seekRequested = Signal(float)
+
+    def __init__(self, pixmap: QPixmap, parent=None):
+        super().__init__(parent)
+        self._pixmap = pixmap
+        self._position_ratio = 0.0
+        self.setMinimumHeight(120)
+        self.setCursor(Qt.PointingHandCursor)
+        if pixmap and not pixmap.isNull():
+            self.setMinimumWidth(min(pixmap.width(), 600))
+
+    def set_position_ratio(self, ratio: float):
+        self._position_ratio = max(0.0, min(1.0, ratio))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        rect = self.rect()
+        painter.fillRect(rect, QColor("#1e1e1e"))
+
+        if self._pixmap and not self._pixmap.isNull():
+            scaled = self._pixmap.scaled(rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            painter.drawPixmap(rect, scaled)
+        else:
+            painter.setPen(QPen(QColor("#888888")))
+            painter.drawText(rect, Qt.AlignCenter, self.tr("Waveform not available"))
+
+        playhead_x = int(rect.width() * self._position_ratio)
+        painter.setPen(QPen(QColor("#FF5252"), 2))
+        painter.drawLine(playhead_x, 0, playhead_x, rect.height())
+        painter.end()
+
+    def _emit_seek(self, x):
+        if self.width() <= 0:
+            return
+        ratio = max(0.0, min(1.0, x / self.width()))
+        # Move the playhead immediately for responsive scrubbing.
+        self.set_position_ratio(ratio)
+        self.seekRequested.emit(ratio)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._emit_seek(event.position().x())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._emit_seek(event.position().x())
+        super().mouseMoveEvent(event)
+
+
+class MediaPlayerDialog(QDialog):
+    def __init__(self, material_path, is_video, parent=None):
+        super().__init__(parent)
+        self.finished.connect(self.deleteLater)
+        self.material_path = Path(material_path)
+        self.is_video = is_video
+        self.setWindowTitle(self.tr("Play: {name}").format(name=self.material_path.name))
+        self._slider_pressed = False
+
+        layout = QVBoxLayout(self)
+
+        # --- Display area ---
+        self._waveform = None
+        if is_video:
+            self._video_widget = QVideoWidget(self)
+            self._video_widget.setMinimumSize(480, 270)
+            layout.addWidget(self._video_widget, stretch=1)
+        else:
+            waveform_pixmap = generate_waveform_pixmap(self.material_path, 600, 140)
+            self._waveform = WaveformWidget(waveform_pixmap, self)
+            self._waveform.seekRequested.connect(self._on_waveform_seek)
+            layout.addWidget(self._waveform, stretch=1)
+
+        # --- Player ---
+        self._player = QMediaPlayer(self)
+        self._audio_output = QAudioOutput(self)
+        self._player.setAudioOutput(self._audio_output)
+        if is_video:
+            self._player.setVideoOutput(self._video_widget)
+        self._player.setSource(QUrl.fromLocalFile(str(self.material_path)))
+
+        self._player.durationChanged.connect(self._on_duration_changed)
+        self._player.positionChanged.connect(self._on_position_changed)
+        self._player.playbackStateChanged.connect(self._on_playback_state_changed)
+        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self._player.errorOccurred.connect(self._on_error)
+
+        # --- Controls ---
+        controls = QHBoxLayout()
+        self._play_button = QToolButton(self)
+        self._play_button.setIcon(self._themed_standard_icon(QStyle.SP_MediaPlay))
+        self._play_button.setToolTip(self.tr("Play/Pause"))
+        self._play_button.clicked.connect(self._toggle_play)
+        controls.addWidget(self._play_button)
+
+        # Video uses a slider to seek; audio seeks via the waveform itself,
+        # so no separate slider is added.
+        if is_video:
+            self._slider = QSlider(Qt.Horizontal, self)
+            self._slider.setRange(0, 0)
+            self._slider.sliderPressed.connect(self._on_slider_pressed)
+            self._slider.sliderReleased.connect(self._on_slider_released)
+            self._slider.sliderMoved.connect(self._player.setPosition)
+            controls.addWidget(self._slider, stretch=1)
+        else:
+            self._slider = None
+            controls.addStretch(1)
+
+        self._time_label = QLabel("00:00 / 00:00", self)
+        controls.addWidget(self._time_label)
+        layout.addLayout(controls)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Close)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        # Auto-start playback.
+        self._player.play()
+
+    def _themed_standard_icon(self, standard_pixmap) -> QIcon:
+        # Recolor the standard media icon to the palette text color so it stays
+        # legible against either the dark or light theme.
+        base_icon = self.style().standardIcon(standard_pixmap)
+        pixmap = base_icon.pixmap(QSize(32, 32))
+        if pixmap.isNull():
+            return base_icon
+
+        color = self.palette().color(QPalette.WindowText)
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), color)
+        painter.end()
+        return QIcon(pixmap)
+
+    @staticmethod
+    def _format_time(ms: int) -> str:
+        total_seconds = max(0, ms) // 1000
+        minutes, seconds = divmod(total_seconds, 60)
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _update_time_label(self):
+        self._time_label.setText(
+            f"{self._format_time(self._player.position())} / {self._format_time(self._player.duration())}"
+        )
+
+    @Slot(int)
+    def _on_duration_changed(self, duration):
+        if self._slider is not None:
+            self._slider.setRange(0, duration)
+        self._update_time_label()
+
+    @Slot(int)
+    def _on_position_changed(self, position):
+        if self._slider is not None and not self._slider_pressed:
+            self._slider.setValue(position)
+        self._update_time_label()
+        if self._waveform is not None:
+            duration = self._player.duration()
+            ratio = (position / duration) if duration > 0 else 0.0
+            self._waveform.set_position_ratio(ratio)
+
+    @Slot()
+    def _on_slider_pressed(self):
+        self._slider_pressed = True
+
+    @Slot()
+    def _on_slider_released(self):
+        self._slider_pressed = False
+        self._player.setPosition(self._slider.value())
+
+    @Slot(float)
+    def _on_waveform_seek(self, ratio):
+        duration = self._player.duration()
+        if duration > 0:
+            self._player.setPosition(int(duration * ratio))
+
+    def _toggle_play(self):
+        if self._player.playbackState() == QMediaPlayer.PlayingState:
+            self._player.pause()
+        else:
+            self._player.play()
+
+    @Slot(QMediaPlayer.PlaybackState)
+    def _on_playback_state_changed(self, state):
+        icon = QStyle.SP_MediaPause if state == QMediaPlayer.PlayingState else QStyle.SP_MediaPlay
+        self._play_button.setIcon(self._themed_standard_icon(icon))
+
+    @Slot(QMediaPlayer.MediaStatus)
+    def _on_media_status_changed(self, status):
+        if status == QMediaPlayer.EndOfMedia:
+            self._player.stop()
+            self._player.setPosition(0)
+            if self._slider is not None:
+                self._slider.setValue(0)
+            if self._waveform is not None:
+                self._waveform.set_position_ratio(0.0)
+
+    @Slot(QMediaPlayer.Error, str)
+    def _on_error(self, error, error_string):
+        if error != QMediaPlayer.NoError:
+            QMessageBox.warning(
+                self,
+                self.tr("Playback Error"),
+                self.tr("Could not play the material:\n{error}").format(error=error_string),
+            )
+
+    def _cleanup(self):
+        self._player.stop()
+        self._player.setSource(QUrl())
+
+    def closeEvent(self, event):
+        self._cleanup()
+        super().closeEvent(event)
+
+    def reject(self):
+        self._cleanup()
+        super().reject()

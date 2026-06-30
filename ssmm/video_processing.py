@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 import threading
 import uuid
-from PIL import Image, ImageDraw, ImageFont
 import re
 import json
 import shutil
@@ -13,15 +12,17 @@ import shlex
 import platform
 import os
 import math
+import signal
 
 from PySide6.QtCore import QObject, Signal, Slot, QProcess
-import fitz
 
-from models import ProjectModel, Slide, ProjectParameters
-import config
-from utils import resolve_resource_path, get_ffprobe_path, get_ffmpeg_path
-from ffmpeg_builder import FFmpegCommandBuilder
-from slide_processor import SlideProcessorFactory
+from ssmm.models import ProjectModel, Slide, ProjectParameters
+from ssmm import config
+from ssmm import pdf_utils
+from ssmm.utils import get_ffprobe_path, get_ffmpeg_path
+from ssmm.ffmpeg_builder import FFmpegCommandBuilder
+from ssmm.slide_processor import SlideProcessorFactory
+from ssmm.watermark import render_watermark_overlay
 
 class ProcessingCanceled(Exception):
     pass
@@ -87,7 +88,7 @@ class VideoProcessor(QObject):
         super().__init__()
         self._is_canceled = False
         self._is_canceled_lock = threading.Lock()
-        self.active_processes = set()
+        self.active_pids = set()
         self.process_lock = threading.Lock()
         self.watermark_path: Path | None = None
         self._current_step = 0
@@ -112,18 +113,20 @@ class VideoProcessor(QObject):
 
     def cancel(self):
         self._set_canceled(True)
-        
-        procs_to_kill = []
-        with self.process_lock:
-            procs_to_kill = list(self.active_processes)
 
-        for process in procs_to_kill:
+        # cancel() runs on the GUI thread while the QProcess objects live on the worker
+        # thread, and QProcess is not thread-safe. Signal the OS processes by pid (captured
+        # on the worker thread after start) so we never touch a QProcess across threads.
+        with self.process_lock:
+            pids_to_kill = list(self.active_pids)
+
+        kill_signal = signal.SIGKILL if hasattr(signal, 'SIGKILL') else signal.SIGTERM
+        for pid in pids_to_kill:
             try:
-                if process.state() != QProcess.NotRunning:
-                    process.kill()
-            except Exception:
-                print(f"[WARNING] Failed to kill process during cancel.")
-                pass
+                os.kill(pid, kill_signal)
+            except (ProcessLookupError, OSError) as e:
+                # Already exited, or the pid is no longer valid; nothing to kill.
+                self.log_message.emit(f"[DEBUG] Could not signal process {pid} during cancel: {e}", 'app')
             
     @Slot(ProjectModel, bool)
     def start_video_creation(self, project_model: ProjectModel, is_verbose: bool):
@@ -139,14 +142,6 @@ class VideoProcessor(QObject):
         success, message = self.run_preview_creation(project_model, slide_index, pdf_path, include_intervals)
         self.preview_finished.emit(success, message)
         
-    def register_process(self, process: QProcess):
-        with self.process_lock:
-            self.active_processes.add(process)
-
-    def unregister_process(self, process: QProcess):
-        with self.process_lock:
-            self.active_processes.discard(process)
-
     def _run_subprocess(self, command_list: list[str], capture_output=False, timeout_sec=None):
         if self._get_is_canceled():
             raise ProcessingCanceled("Operation was canceled before starting the process.")
@@ -154,8 +149,6 @@ class VideoProcessor(QObject):
         self.log_message.emit(f"[DEBUG] Running command: {' '.join(shlex.quote(str(arg)) for arg in command_list)}", 'app')
 
         process = QProcess()
-        self.register_process(process)
-
         process.setProcessChannelMode(QProcess.MergedChannels)
         
         output_chunks = []
@@ -169,11 +162,19 @@ class VideoProcessor(QObject):
         
         process.readyRead.connect(handle_output)
 
+        started_pid = None
         try:
             process.start(command_list[0], command_list[1:])
 
             if not process.waitForStarted(config.PROCESS_START_TIMEOUT_MS):
                 raise RuntimeError("Process failed to start.")
+
+            # Record the OS pid so cancel() can terminate this process from the GUI thread
+            # without calling any (thread-affine) QProcess method.
+            started_pid = process.processId()
+            if started_pid:
+                with self.process_lock:
+                    self.active_pids.add(started_pid)
 
             timeout_ms = (timeout_sec * 1000) if timeout_sec is not None else config.FFMPEG_ENCODE_TIMEOUT_MS
             finished_normally = process.waitForFinished(timeout_ms)
@@ -184,7 +185,9 @@ class VideoProcessor(QObject):
             exit_code = process.exitCode()
             exit_status = process.exitStatus()
 
-            if self._get_is_canceled() or exit_status == QProcess.CrashExit: # 変更
+            # Check the cancel flag before treating CrashExit as a real crash,
+            # since cancelling kills the process and reports CrashExit.
+            if self._get_is_canceled():
                 raise ProcessingCanceled()
 
             if not finished_normally:
@@ -193,6 +196,9 @@ class VideoProcessor(QObject):
                     process.waitForFinished(5000)
                 raise TimeoutError(f"Process timed out after {timeout_ms / 1000} seconds.")
 
+            if exit_status == QProcess.CrashExit:
+                raise Exception(f"FFmpeg process crashed unexpectedly (e.g. segmentation fault or out-of-memory kill).\nOutput:\n{combined_output}")
+
             if exit_code != 0 or exit_status != QProcess.NormalExit:
                 error_string = process.errorString()
                 raise Exception(f"Command exited with status {exit_code} and error '{error_string}'.\nOutput:\n{combined_output}")
@@ -200,7 +206,9 @@ class VideoProcessor(QObject):
             return combined_output
 
         finally:
-            self.unregister_process(process)
+            if started_pid:
+                with self.process_lock:
+                    self.active_pids.discard(started_pid)
 
     def _create_ffmpeg_builder(self) -> FFmpegCommandBuilder:
         builder = FFmpegCommandBuilder()
@@ -226,7 +234,7 @@ class VideoProcessor(QObject):
                     self.log_message.emit(f"[INFO] Temporary files are being kept in: {temp_dir}", 'app')
                     self._run_logic(project_model, Path(temp_dir), temp_video_path)
 
-                if not self._is_canceled:
+                if not self._get_is_canceled():
                     if final_video_path.exists():
                         final_video_path.unlink()
                     shutil.move(str(temp_video_path), str(final_video_path))
@@ -241,6 +249,12 @@ class VideoProcessor(QObject):
                     
                     self.log_message.emit(f"[SUCCESS] Video created successfully at: {final_video_path}", 'app')
                     return (True, str(final_video_path))
+
+                # Handle cancellation that occurs after _run_logic but before the move.
+                if temp_video_path.exists():
+                    temp_video_path.unlink()
+                self.log_message.emit("[INFO] Video creation was canceled by user.", 'app')
+                return (False, "Canceled by user.")
 
             except ProcessingCanceled:
                 if temp_video_path.exists():
@@ -291,7 +305,7 @@ class VideoProcessor(QObject):
                 main_slide = project_model.slides[slide_index]
                 codec_option = self._resolve_codec_option(project_model.parameters.codec, project_model.parameters.hardware_encoding)
                 
-                with fitz.open(pdf_path) as doc:
+                with pdf_utils.open_pdf_ctx(pdf_path) as doc:
                     if slide_index not in image_paths_cache:
                         image_paths_cache[slide_index] = self._render_single_page(doc, slide_index, target_width, temp_folder)
                     main_image_path = image_paths_cache[slide_index]
@@ -301,7 +315,7 @@ class VideoProcessor(QObject):
                     slide_info = (slide_index, main_slide, project_model, {slide_index: main_image_path}, temp_folder, codec_option)
                     self._generate_single_slide_video(slide_info, output_path=main_video_path)
                     self.progress_updated.emit(40)
-                    if self._is_canceled: raise ProcessingCanceled()
+                    if self._get_is_canceled(): raise ProcessingCanceled()
 
                     videos_to_concat = []
                     
@@ -404,7 +418,7 @@ class VideoProcessor(QObject):
                 self.watermark_path = None
 
     def _generate_single_slide_video(self, slide_info: tuple, output_path: Path = None) -> tuple[int, Path]:
-        if self._is_canceled:
+        if self._get_is_canceled():
             raise ProcessingCanceled()
 
         i = slide_info[0]
@@ -425,8 +439,13 @@ class VideoProcessor(QObject):
         
         ffmpeg_keyword = config.TRANSITION_MAPPINGS.get(transition_name)
         if not ffmpeg_keyword:
-            half_interval = interval_duration / 2
-            prev_ext, next_ext = self._create_extended_videos_from_frames(model, prev_frame_path, next_frame_path, half_interval, codec, temp_dir, index_suffix)
+            fps = model.parameters.fps
+            total_frames = round(interval_duration * fps)
+            first_frames = math.ceil(total_frames / 2)
+            second_frames = total_frames - first_frames
+            prev_ext, next_ext = self._create_extended_videos_from_frames(
+                model, prev_frame_path, next_frame_path, first_frames / fps, codec, temp_dir,
+                index_suffix, next_duration=second_frames / fps)
             concat_list = temp_dir / f'concat_interval_preview_{index_suffix}.txt'
             with concat_list.open('w', encoding='utf-8') as f:
                 f.write(f"file '{self._sanitize_path_for_concat(str(prev_ext))}'\n")
@@ -457,7 +476,7 @@ class VideoProcessor(QObject):
 
         return output_path
 
-    def _create_extended_videos_from_frames(self, model, prev_frame, next_frame, duration, codec, temp_dir, index_suffix):
+    def _create_extended_videos_from_frames(self, model, prev_frame, next_frame, duration, codec, temp_dir, index_suffix, next_duration=None):
         params = model.parameters
         fps = params.fps
         res = params.resolution
@@ -466,12 +485,17 @@ class VideoProcessor(QObject):
         prev_ext = temp_dir / f'prev_extended_preview_{index_suffix}.mp4'
         next_ext = temp_dir / f'next_extended_preview_{index_suffix}.mp4'
         
-        quantized_duration = self._quantize_duration_for_fps(duration, fps)
-
         video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
-        
-        for frame_path, video_path in [(prev_frame, prev_ext), (next_frame, next_ext)]:
+
+        # Match _create_extended_videos: allow per-clip lengths so a no-transition preview
+        # interval sums exactly to the requested duration.
+        clip_specs = [
+            (prev_frame, prev_ext, duration),
+            (next_frame, next_ext, duration if next_duration is None else next_duration),
+        ]
+        for frame_path, video_path, clip_duration in clip_specs:
+            quantized_duration = self._quantize_duration_for_fps(clip_duration, fps)
             builder = self._create_ffmpeg_builder()
             builder.add_input(frame_path, ['-loop', '1'])
             builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
@@ -502,7 +526,7 @@ class VideoProcessor(QObject):
     def _generate_single_transition_video(self, transition_info: tuple) -> tuple[int, Path | None]:
         i, slide, prev_video, next_video, project_model, temp_folder, codec_option = transition_info
 
-        if self._is_canceled:
+        if self._get_is_canceled():
             raise ProcessingCanceled()
 
         interval_video_path = temp_folder / f"interval_{i}.mp4"
@@ -537,21 +561,18 @@ class VideoProcessor(QObject):
                 self.watermark_path = None
         return codec_option
 
-    def _render_single_page(self, doc: fitz.Document, page_num: int, target_width: int, temp_folder: Path) -> Path:
-        if self._is_canceled:
+    def _render_single_page(self, doc: "pdf_utils.pdfium.PdfDocument", page_num: int, target_width: int, temp_folder: Path) -> Path:
+        if self._get_is_canceled():
             raise ProcessingCanceled()
 
-        page = doc.load_page(page_num)
-        if page.rect.width == 0:
+        width, _height = pdf_utils.page_size(doc, page_num)
+        if width == 0:
             raise Exception(f"PDF page {page_num + 1} has zero width.")
 
-        zoom = target_width / page.rect.width
-        matrix = fitz.Matrix(zoom, zoom)
-        
-        pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
-        
+        pil_image = pdf_utils.render_page_to_pil(doc, page_num, target_width=target_width)
+
         out_path = temp_folder / f"page_{page_num + 1:03d}.png"
-        pix.save(str(out_path))
+        pil_image.save(str(out_path))
         return out_path
 
     def _render_pdf_pages(self, project_model: ProjectModel, temp_folder: Path) -> dict[int, Path]:
@@ -568,27 +589,20 @@ class VideoProcessor(QObject):
         target_width, _ = map(int, res_str.split('x'))
         image_paths_dict = {}
 
-        with fitz.open(pdf_path) as doc:
-            for page_num, page in enumerate(doc):
-                if self._is_canceled:
+        with pdf_utils.open_pdf_ctx(pdf_path) as doc:
+            for page_num in range(pdf_utils.num_pages(doc)):
+                if self._get_is_canceled():
                     raise ProcessingCanceled()
 
-                if page.rect.width == 0:
+                width, _height = pdf_utils.page_size(doc, page_num)
+                if width == 0:
                     raise Exception(f"PDF page {page_num + 1} has zero width.")
 
-                pix = None
-                try:
-                    zoom = target_width / page.rect.width
-                    matrix = fitz.Matrix(zoom, zoom)
-                    
-                    pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
-                    
-                    out_path = temp_folder / f"page_{page_num + 1:03d}.png"
-                    pix.save(str(out_path))
-                    image_paths_dict[page_num] = out_path
-                finally:
-                    if pix:
-                        del pix
+                pil_image = pdf_utils.render_page_to_pil(doc, page_num, target_width=target_width)
+
+                out_path = temp_folder / f"page_{page_num + 1:03d}.png"
+                pil_image.save(str(out_path))
+                image_paths_dict[page_num] = out_path
 
         return image_paths_dict
 
@@ -597,7 +611,7 @@ class VideoProcessor(QObject):
         self.log_message.emit("Generating individual slide videos...", 'app')
         slide_videos_map = {}
         for i, slide in enumerate(project_model.slides):
-            if self._is_canceled: raise ProcessingCanceled()
+            if self._get_is_canceled(): raise ProcessingCanceled()
             try:
                 slide_info = (i, slide, project_model, image_paths_dict, temp_folder, codec_option)
                 index, slide_video_path = self._generate_single_slide_video(slide_info)
@@ -617,7 +631,7 @@ class VideoProcessor(QObject):
         transition_videos_map = {}
         total_slides = len(project_model.slides)
         for i in range(total_slides - 1):
-            if self._is_canceled: raise ProcessingCanceled()
+            if self._get_is_canceled(): raise ProcessingCanceled()
             
             slide = project_model.slides[i]
             if slide.interval_to_next > 0:
@@ -667,7 +681,7 @@ class VideoProcessor(QObject):
             normalized_video_path = temp_folder / "normalized.mp4"
             audio_opts = self._get_common_audio_options(params)
             
-            if params.normalize_loudness_mode == "1-Pass (Faster)":
+            if params.normalize_loudness_mode == config.LOUDNORM_MODES["ONE_PASS"]:
                 self.log_message.emit("Applying loudness normalization (1-Pass)...", 'app')
                 loudnorm_filter = "loudnorm"
             else:
@@ -748,12 +762,14 @@ class VideoProcessor(QObject):
 
             self.log_message.emit(f"[INFO] Running 1st pass for {output_path.name}...", 'app')
             video_opts_1 = self._get_video_encoding_options(params, pass_num=1)
-            
-            pass1_opts = base_output_options + ['-c:v', codec] + video_opts_1 + ['-an', '-passlogfile', pass_log_prefix]
-            
+
+            # The 1st pass discards its output to the null device with the null muxer
+            # ('-f null'), since the device has no extension for ffmpeg to infer one.
+            pass1_opts = base_output_options + ['-c:v', codec] + video_opts_1 + ['-an', '-f', 'null', '-passlogfile', pass_log_prefix]
+
             builder.set_output(null_device, pass1_opts)
             self._run_subprocess(builder.build())
-            if self._is_canceled: return
+            if self._get_is_canceled(): return
 
             self.log_message.emit(f"[INFO] Running 2nd pass for {output_path.name}...", 'app')
             video_opts_2 = self._get_video_encoding_options(params, pass_num=2)
@@ -805,6 +821,12 @@ class VideoProcessor(QObject):
             builder.add_input(audio_path)
             audio_input_index = len(builder.inputs) - 1
             target_duration = self._get_media_duration(audio_path)
+            if target_duration <= 0:
+                # Re-probing can fail transiently; fall back to the duration measured at
+                # validation. A zero would emit a '-t 0' (empty) segment that breaks concat.
+                target_duration = slide.duration
+            if target_duration <= 0:
+                raise ValueError(f"Could not determine a valid duration for audio '{Path(audio_path).name}'.")
         else:
             builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi'])
             audio_input_index = len(builder.inputs) - 1
@@ -935,7 +957,10 @@ class VideoProcessor(QObject):
         
         quantized_duration = self._quantize_duration_for_fps(slide.duration, fps)
         builder.add_input(image, ['-loop', '1', '-t', str(quantized_duration)])
-        builder.add_input(video, ['-noautorotate', '-vsync', 'cfr'])
+        # CFR is enforced by the output '-r' below (as it already is for the still-image
+        # slides). The previous '-vsync cfr' here was deprecated and misplaced as an input
+        # option, so it is dropped.
+        builder.add_input(video, ['-noautorotate'])
 
         if self.watermark_path:
             builder.add_input(self.watermark_path)
@@ -990,9 +1015,18 @@ class VideoProcessor(QObject):
         self._cleanup_files(prev_frame, next_frame, prev_ext, next_ext)
 
     def _create_simple_interval_video(self, model, prev_slide, next_slide, interval_duration, output_path, codec, index):
-        half_interval = interval_duration / 2
+        fps = model.parameters.fps
+        # interval_duration is already frame-quantized. Split it into two clips whose exact
+        # frame counts sum back to it, so the produced segment matches the duration the
+        # chapter/metadata math assumes. (Using a single q(interval/2) for both halves could
+        # overshoot at odd FPS and drift the embedded/YouTube chapters.)
+        total_frames = round(interval_duration * fps)
+        first_frames = math.ceil(total_frames / 2)
+        second_frames = total_frames - first_frames
         temp_dir = output_path.parent
-        prev_video, next_video, prev_frame, next_frame = self._create_extended_videos(model, prev_slide, next_slide, half_interval, codec, temp_dir, index)
+        prev_video, next_video, prev_frame, next_frame = self._create_extended_videos(
+            model, prev_slide, next_slide, first_frames / fps, codec, temp_dir, index,
+            next_duration=second_frames / fps)
         
         concat_list = temp_dir / f'concat_interval_{index}.txt'
         with concat_list.open('w', encoding='utf-8') as f:
@@ -1006,7 +1040,7 @@ class VideoProcessor(QObject):
         self._run_subprocess(concat_command)
         self._cleanup_files(prev_frame, next_frame, prev_video, next_video, concat_list)
 
-    def _create_extended_videos(self, model, prev, next_vid, duration, codec, temp_dir, index):
+    def _create_extended_videos(self, model, prev, next_vid, duration, codec, temp_dir, index, next_duration=None):
         params = model.parameters
         fps = params.fps
         res = params.resolution
@@ -1014,8 +1048,12 @@ class VideoProcessor(QObject):
         prev_frame = temp_dir / f'prev_frame_{index}.png'
         next_frame = temp_dir / f'next_frame_{index}.png'
 
+        # Grab a frame near the end of the previous clip. Seek from the start with a
+        # clamped offset rather than '-sseof -1', which seeks before the start for
+        # sub-second clips and can yield no frame (aborting the render).
+        prev_seek = max(0.0, self._get_media_duration(prev) - 1.0)
         builder_prev = FFmpegCommandBuilder()
-        cmd_prev = (builder_prev.add_input(prev, ['-sseof', '-1'])
+        cmd_prev = (builder_prev.add_input(prev, ['-ss', str(prev_seek)])
                                 .set_output(prev_frame, ['-update', '1', '-vframes', '1'])
                                 .build())
         self._run_subprocess(cmd_prev)
@@ -1028,23 +1066,29 @@ class VideoProcessor(QObject):
         
         prev_ext = temp_dir / f'prev_extended_{index}.mp4'
         next_ext = temp_dir / f'next_extended_{index}.mp4'
-        quantized_duration = self._quantize_duration_for_fps(duration, fps)
         video_opts = self._get_video_encoding_options(params, pass_num=1, is_single_pass_override=True)
         audio_opts = self._get_common_audio_options(params)
-        
-        for frame, video in [(prev_frame, prev_ext), (next_frame, next_ext)]:
+
+        # The two clips may have different lengths so that, for a no-transition interval,
+        # they sum exactly to the requested duration (see _create_simple_interval_video).
+        clip_specs = [
+            (prev_frame, prev_ext, duration),
+            (next_frame, next_ext, duration if next_duration is None else next_duration),
+        ]
+        for frame, video, clip_duration in clip_specs:
+            quantized_duration = self._quantize_duration_for_fps(clip_duration, fps)
             builder = self._create_ffmpeg_builder()
             builder.add_input(frame, ['-loop', '1'])
             builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
-            
+
             filter_str = f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2[v_out]"
             builder.set_filter_complex(filter_str)
 
             output_options = ['-map', '[v_out]', '-map', '1:a', '-c:v', codec] + video_opts + audio_opts + ['-t', str(quantized_duration), '-r', str(fps)]
-            
+
             command = builder.set_output(video, output_options).build()
             self._run_subprocess(command)
-            
+
         return prev_ext, next_ext, prev_frame, next_frame
     
     def _get_media_duration(self, media_path: Path) -> float:
@@ -1071,7 +1115,10 @@ class VideoProcessor(QObject):
             
     def _resolve_codec_option(self, codec, hw):
         if hw is not None:
-            return config.CODEC_MAP.get(codec, {}).get(hw, '')
+            hw_codec = config.CODEC_MAP.get(codec, {}).get(hw)
+            if hw_codec:
+                return hw_codec
+            # Unknown hardware/codec combination: fall back to the software encoder.
         return config.SOFTWARE_CODEC_MAP.get(codec, 'libx264')
     
     def _get_common_audio_options(self, params: "ProjectParameters"):
@@ -1117,15 +1164,30 @@ class VideoProcessor(QObject):
         elif codec == 'libaom-av1':
             options.extend(['-profile:v', 'main', '-cpu-used', '7'])
         elif codec == 'av1_nvenc':
-            options.extend(['-profile:v', 'main', '-preset', 'p5'])
+            # av1_nvenc has no named profile constants; omit the profile and let it default to Main.
+            options.extend(['-preset', 'p5'])
         elif codec == 'av1_qsv':
             options.extend(['-profile:v', 'main', '-preset', 'medium'])
         elif codec == 'av1_amf':
             options.extend(['-profile:v', 'main', '-quality', 'quality'])
 
         if mode == config.ENCODING_MODES["QUALITY"]:
-            if 'nvenc' in codec or 'qsv' in codec or 'amf' in codec:
+            if 'nvenc' in codec:
+                # NVENC uses -qp for constant-QP rate control.
                 options.extend(['-qp', str(value)])
+            elif 'qsv' in codec:
+                # QSV uses -global_quality for constant quality.
+                options.extend(['-global_quality', str(value)])
+            elif 'amf' in codec:
+                # AMF uses constant-QP rate control with per-frame-type quantisers; AV1 AMF has no B-frame QP.
+                options.extend(['-rc', 'cqp', '-qp_i', str(value), '-qp_p', str(value)])
+                if codec != 'av1_amf':
+                    options.extend(['-qp_b', str(value)])
+            elif codec == 'mpeg4':
+                # The native mpeg4 encoder uses the qscale quality scale (1-31, lower is better); clamp the value into range.
+                low, high = config.ENCODING_MPEG4_QSCALE_RANGE
+                qscale = max(low, min(high, value))
+                options.extend(['-qscale:v', str(qscale)])
             else:
                 options.extend(['-crf', str(value)])
         else:
@@ -1162,71 +1224,36 @@ class VideoProcessor(QObject):
             
         stats = json.loads(json_match.group(1))
 
+        # Validate measured values; silent/zero-length audio yields non-finite
+        # results that the caller falls back from to single-pass loudnorm.
+        required_keys = ('input_i', 'input_lra', 'input_tp', 'input_thresh', 'target_offset')
+        measured = {}
+        for key in required_keys:
+            try:
+                value = float(stats[key])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"loudnorm analysis returned a missing or non-numeric '{key}'.")
+            if not math.isfinite(value):
+                raise ValueError(f"loudnorm analysis returned a non-finite '{key}' ({stats.get(key)}); the audio may be silent.")
+            measured[key] = value
+
         params = (
             f"I=-23.0:LRA=7.0:TP=-2.0:"
-            f"measured_I={stats['input_i']}:"
-            f"measured_LRA={stats['input_lra']}:"
-            f"measured_TP={stats['input_tp']}:"
-            f"measured_thresh={stats['input_thresh']}:"
-            f"offset={stats['target_offset']}"
+            f"measured_I={measured['input_i']}:"
+            f"measured_LRA={measured['input_lra']}:"
+            f"measured_TP={measured['input_tp']}:"
+            f"measured_thresh={measured['input_thresh']}:"
+            f"offset={measured['target_offset']}"
         )
         return params
 
     def _generate_watermark_image(self, params: ProjectParameters, width: int, height: int, temp_folder: Path) -> Path:
-        font_file = config.BUNDLED_FONTS.get(params.watermark_fontfamily)
-        if not font_file:
-            raise FileNotFoundError(f"Font definition for '{params.watermark_fontfamily}' not found.")
-        
-        font_path = resolve_resource_path(Path('fonts') / font_file)
-        if not font_path.exists():
-            raise FileNotFoundError(f"Font file not found: {font_path}")
+        # Shared with the preview overlays (ssmm/watermark.py) so the exported video
+        # and the slide previews render the watermark identically.
+        final_image = render_watermark_overlay(params, width, height)
+        if final_image is None:
+            raise ValueError("Watermark is not enabled or has no text.")
 
-        font_size_px = int(height * (params.watermark_fontsize / 100))
-        font = ImageFont.truetype(str(font_path), font_size_px)
-        
-        rgba_color = config.WATERMARK_COLOR_OPTIONS_RGBA.get(params.watermark_color, (255, 255, 255))
-        fill_color = (*rgba_color, int(255 * (params.watermark_opacity / 100)))
-
-        bbox = font.getbbox(params.watermark_text)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        text_offset_y = bbox[1]
-        stamp_canvas_size = (text_width, text_height)
-        text_draw_pos = (0, -text_offset_y)
-
-        stamp_img = Image.new('RGBA', stamp_canvas_size, (0,0,0,0))
-        draw_stamp = ImageDraw.Draw(stamp_img)
-        draw_stamp.text(text_draw_pos, params.watermark_text, font=font, fill=fill_color)
-
-        if params.watermark_rotation != "None":
-            angle = -int(params.watermark_rotation)
-            stamp_img = stamp_img.rotate(angle, expand=True, resample=Image.BICUBIC)
-
-        final_image = Image.new('RGBA', (width, height), (0,0,0,0))
-        stamp_w, stamp_h = stamp_img.size
-
-        if params.watermark_tile:
-            base_spacing_x = int(text_width * 0.8)
-            base_spacing_y = int(text_height * 2.0)
-
-            step_x = text_width + base_spacing_x
-            step_y = text_height + base_spacing_y
-
-            if params.watermark_rotation != "None":
-                step_y = int(text_height * 1.5)
-
-            step_x = max(1, step_x)
-            step_y = max(1, step_y)
-            
-            for y in range(-stamp_h, height + stamp_h, step_y):
-                for x in range(-stamp_w, width + stamp_w, step_x):
-                    x_offset = (step_x // 2) if (y // step_y) % 2 != 0 else 0
-                    final_image.paste(stamp_img, (x + x_offset, y), stamp_img)
-        else:
-            pos_x = (width - stamp_w) // 2
-            pos_y = (height - stamp_h) // 2
-            final_image.paste(stamp_img, (pos_x, pos_y), stamp_img)
-        
         output_path = temp_folder / f"watermark_{uuid.uuid4().hex}.png"
         final_image.save(output_path, "PNG")
         return output_path
@@ -1264,6 +1291,16 @@ class VideoProcessor(QObject):
                 timestamp = self._format_seconds_to_hhmmss(chap['start_time'])
                 f.write(f"{timestamp} {chap['title']}\n")
 
+    @staticmethod
+    def _escape_ffmetadata(value: str) -> str:
+        # Backslash-escape the ffmetadata special characters '=', ';', '#', '\' and
+        # newlines. Escape the backslash first to avoid double-escaping.
+        value = value.replace('\r\n', '\n').replace('\r', '\n')
+        value = value.replace('\\', '\\\\')
+        for ch in ('=', ';', '#'):
+            value = value.replace(ch, '\\' + ch)
+        return value.replace('\n', '\\\n')
+
     def _generate_ffmetadata(self, model: ProjectModel, path: Path):
         start_times = []
         current_time = 0.0
@@ -1285,10 +1322,13 @@ class VideoProcessor(QObject):
             for i, chap in enumerate(chapters):
                 start = chap['start_time']
                 end = chapters[i+1]['start_time'] if i + 1 < len(chapters) else total_duration_ms
-                f.write(f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={chap['title']}\n")
+                title = self._escape_ffmetadata(chap['title'])
+                f.write(f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={title}\n")
 
     def _sanitize_path_for_concat(self, path_str: str) -> str:
-        return path_str.replace('\\', '/').replace("'", "'\\\\''").replace('\n', '').replace('\r', '').replace(';', '\\;')
+        # Escape a path for the concat demuxer: normalise backslashes to '/',
+        # escape single quotes as '\'', and strip newlines.
+        return path_str.replace('\\', '/').replace("'", "'\\''").replace('\n', '').replace('\r', '')
 
     def _cleanup_files(self, *paths):
         for p in paths:
