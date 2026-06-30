@@ -1,10 +1,12 @@
 # models.py
+import copy
+import html
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import config
+from ssmm import config
 
 
 class AppState(Enum):
@@ -33,7 +35,7 @@ class ProjectParameters:
     audio_sample_rate: str = "32000"
     audio_channels: int = 2
     normalize_loudness: bool = False
-    normalize_loudness_mode: str = "2-Pass (Recommended)"
+    normalize_loudness_mode: str = config.LOUDNORM_MODES["TWO_PASS"]
     add_watermark: bool = False
     watermark_text: str = ""
     watermark_opacity: int = 50
@@ -127,7 +129,8 @@ class ValidationMessages:
         usage_data = {
             "slide_index": slide_index,
             "pinp_geometry": pinp_geometry,
-            "slide": slide,
+            # Snapshot the slide so later edits do not change the report.
+            "slide": copy.deepcopy(slide),
             "preview_base64": preview_base64,
             "warnings": warnings
         }
@@ -186,7 +189,7 @@ class ValidationMessages:
                         body_content.append(f"<p><span class='label notice'>Notice:</span> {notice}</p>")
                     body_content.append('</div>')
                 else:
-                    body_content.append(f'<h3 class="file-box-title"><b>{filename}</b></h3>')
+                    body_content.append(f'<h3 class="file-box-title"><b>{html.escape(filename)}</b></h3>')
 
                 if messages.get("usages"):
                     body_content.append('<div class="usages-container">')

@@ -5,6 +5,12 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Required so softprops/action-gh-release can attach assets to the release.
+# Without it the default GITHUB_TOKEN is read-only and the upload fails with
+# "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -12,12 +18,18 @@ jobs:
         os: [windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
 
+    # Resolve the version once and pass it to the run steps via the environment.
+    # Reading it as $env:RELEASE_TAG / $RELEASE_TAG (instead of interpolating
+    # ${{ ... }} into the script body) prevents shell injection from a crafted tag.
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -25,78 +37,87 @@ jobs:
         run: |
           python -m pip install -U pip wheel
           pip install -r requirements.txt
-          pip install pyinstaller
+
+      - name: Generate third-party license notices
+        run: |
+          python -m pip install pip-licenses
+          python -c "import os; os.makedirs('resources/licenses', exist_ok=True)"
+          pip-licenses --with-license-file --no-license-path --format=plain-vertical --ignore-packages pip-licenses prettytable wcwidth tomli setuptools wheel pip --output-file resources/licenses/THIRD_PARTY_LICENSES.txt
+
+      - name: Install build tools
+        run: pip install pyinstaller
+
+      - name: Compile translations
+        run: pyside6-lrelease translations/ssmm_ja.ts -qm translations/ssmm_ja.qm
 
       - name: Update Version in config.py
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         shell: pwsh
         run: |
-          $ver = "${{ github.event.release.tag_name }}"
-          if (-not $ver) { $ver = "${{ github.ref_name }}" }
-          $ver = $ver.TrimStart("v")
+          $ver = "$env:RELEASE_TAG".TrimStart("v")
           # Replace the entire function call with a static version string for the build
-          (Get-Content config.py) -replace "APP_VERSION = get_version\(\)", "APP_VERSION = '$ver'" | Set-Content config.py
-          echo "Updated config.py to version $ver for build"
+          (Get-Content ssmm/config.py) -replace "APP_VERSION = get_version\(\)", "APP_VERSION = '$ver'" | Set-Content ssmm/config.py
+          echo "Updated ssmm/config.py to version $ver for build"
 
       - name: Make .icns (macOS only)
         if: runner.os == 'macOS'
         run: |
-          mkdir -p assets/app_icon.iconset
-          sips -z 16 16    assets/app_icon.png --out assets/app_icon.iconset/icon_16x16.png
-          sips -z 32 32    assets/app_icon.png --out assets/app_icon.iconset/icon_16x16@2x.png
-          sips -z 32 32    assets/app_icon.png --out assets/app_icon.iconset/icon_32x32.png
-          sips -z 64 64    assets/app_icon.png --out assets/app_icon.iconset/icon_32x32@2x.png
-          sips -z 128 128  assets/app_icon.png --out assets/app_icon.iconset/icon_128x128.png
-          sips -z 256 256  assets/app_icon.png --out assets/app_icon.iconset/icon_128x128@2x.png
-          sips -z 256 256  assets/app_icon.png --out assets/app_icon.iconset/icon_256x256.png
-          sips -z 512 512  assets/app_icon.png --out assets/app_icon.iconset/icon_256x256@2x.png
-          sips -z 512 512  assets/app_icon.png --out assets/app_icon.iconset/icon_512x512.png
-          sips -z 1024 1024 assets/app_icon.png --out assets/app_icon.iconset/icon_512x512@2x.png
-          iconutil -c icns assets/app_icon.iconset -o assets/app_icon.icns
+          mkdir -p resources/assets/app_icon.iconset
+          sips -z 16 16    resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_16x16.png
+          sips -z 32 32    resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_16x16@2x.png
+          sips -z 32 32    resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_32x32.png
+          sips -z 64 64    resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_32x32@2x.png
+          sips -z 128 128  resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_128x128.png
+          sips -z 256 256  resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_128x128@2x.png
+          sips -z 256 256  resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_256x256.png
+          sips -z 512 512  resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_256x256@2x.png
+          sips -z 512 512  resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_512x512.png
+          sips -z 1024 1024 resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_512x512@2x.png
+          iconutil -c icns resources/assets/app_icon.iconset -o resources/assets/app_icon.icns
 
       - name: Ensure ffmpeg executable bits (macOS only)
         if: runner.os == 'macOS'
         run: |
-          chmod +x ffmpeg/bin/ffmpeg ffmpeg/bin/ffprobe 2>/dev/null || true
+          chmod +x resources/ffmpeg/bin/ffmpeg resources/ffmpeg/bin/ffprobe 2>/dev/null || true
 
       # ---------- Build ----------
       - name: Build for Windows Installer (one-dir)
         if: runner.os == 'Windows'
         run: >
           pyinstaller --noconsole --name "SSMM"
-          --icon assets\app_icon.ico
-          --splash assets\splash_screen.png
-          --add-data "assets;assets"
-          --add-data "agif;agif"
-          --add-data "fonts;fonts"
-          --add-data "ffmpeg;ffmpeg"
+          --icon resources\assets\app_icon.ico
+          --splash resources\assets\splash_screen.png
+          --add-data "resources/assets;resources/assets"
+          --add-data "resources/agif;resources/agif"
+          --add-data "resources/fonts;resources/fonts"
+          --add-data "resources/ffmpeg;resources/ffmpeg"
+          --add-data "resources/licenses;resources/licenses"
+          --add-data "translations;translations"
+          --collect-all PySide6.QtMultimedia
+          --collect-all pypdfium2
           main.py
 
       - name: Rename installer build directory
         if: runner.os == 'Windows'
         run: move dist dist_for_installer
 
-      - name: Build for Windows Portable (one-file)
-        if: runner.os == 'Windows'
-        run: >
-          pyinstaller --noconsole --onefile --name "SSMM"
-          --icon assets\app_icon.ico
-          --splash assets\splash_screen.png
-          --add-data "assets;assets"
-          --add-data "agif;agif"
-          --add-data "fonts;fonts"
-          --add-data "ffmpeg;ffmpeg"
-          main.py
+      # NOTE: The Windows portable (one-file) EXE is no longer built here.
+      # It is produced on demand by the manually-triggered
+      # .github/workflows/portable-build.yml workflow.
 
       - name: Build (macOS arm64 onefile)
         if: runner.os == 'macOS'
         run: >
           pyinstaller --windowed --onefile --name "SSMM"
-          --icon assets/app_icon.icns
-          --add-data "assets:assets"
-          --add-data "agif:agif"
-          --add-data "fonts:fonts"
-          --add-data "ffmpeg:ffmpeg"
+          --icon resources/assets/app_icon.icns
+          --add-data "resources/assets:resources/assets"
+          --add-data "resources/agif:resources/agif"
+          --add-data "resources/fonts:resources/fonts"
+          --add-data "resources/ffmpeg:resources/ffmpeg"
+          --add-data "resources/licenses:resources/licenses"
+          --add-data "translations:translations"
+          --collect-all PySide6.QtMultimedia
+          --collect-all pypdfium2
           main.py
 
       # ---------- Package for Release ----------
@@ -104,29 +125,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Get version from tag
-          $ver = "${{ github.event.release.tag_name }}"
-          if (-not $ver) { $ver = "${{ github.ref_name }}" }
-          $ver = $ver.TrimStart("v")
-          
+          $ver = "$env:RELEASE_TAG".TrimStart("v")
+
           # Get architecture from runner context
           $arch = "${{ runner.arch }}".ToLower()
 
-          # 1. Prepare Portable EXE
-          $portableName = "SSMM-${ver}-windows-${arch}-portable.exe"
-          Copy-Item "dist/SSMM.exe" $portableName
-          
-          # 2. Install Inno Setup
+          # 1. Install Inno Setup
           choco install innosetup --no-progress
           $env:Path += ";C:\Program Files (x86)\Inno Setup 6"
 
-          # 3. Update version in Inno Setup script
-          (Get-Content setup.iss).replace('#define AppVersion "1.0.0"', '#define AppVersion "' + $ver + '"') | Set-Content setup.iss
-          
-          # 4. Compile Inno Setup Installer
-          iscc setup.iss
-          
-          # 5. Prepare installer for release
+          # 2. Update version in Inno Setup script (regex so it matches any current
+          #    AppVersion value, not only the literal default)
+          $iss = Get-Content packaging/setup.iss -Raw
+          $iss = $iss -replace '#define AppVersion ".*"', "#define AppVersion ""$ver"""
+          Set-Content packaging/setup.iss -Value $iss
+
+          # 3. Compile Inno Setup Installer
+          iscc packaging/setup.iss
+
+          # 4. Prepare installer for release
           $installerName = "SSMM-${ver}-windows-${arch}-setup.exe"
           Copy-Item "Output/*.exe" $installerName
 
@@ -137,31 +154,41 @@ jobs:
       - name: Create DMG (macOS only)
         if: runner.os == 'macOS'
         run: |
-          VER="${{ github.event.release.tag_name }}"
-          if [ -z "$VER" ]; then VER="${{ github.ref_name }}"; fi
-          VER=$(echo $VER | sed 's/^v//')
-          
+          VER=$(echo "$RELEASE_TAG" | sed 's/^v//')
+
           # Get architecture from runner context
           ARCH=$(echo "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')
-          
+
+          # Stage only the .app so the DMG does not also contain the bare onefile
+          # executable that --onefile leaves alongside SSMM.app in dist/.
+          mkdir -p dmg_staging
+          cp -R "dist/SSMM.app" dmg_staging/
+
           create-dmg \
             --volname "SSMM ${VER}" \
             --window-pos 200 120 \
             --window-size 600 380 \
-            --background "assets/dmg_background.png" \
+            --background "resources/assets/dmg_background.png" \
             --icon-size 128 \
             --icon "SSMM.app" 150 200 \
             --hide-extension "SSMM.app" \
             --app-drop-link 450 200 \
             "SSMM-${VER}-macOS-${ARCH}.dmg" \
-            "dist/"
+            "dmg_staging/"
 
       # ---------- Attach to Release ----------
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+      # Each matrix job uploads only the artifacts it built, so neither job
+      # warns about the other platform's patterns not matching any files.
+      - name: Upload Windows artifacts to Release
+        uses: softprops/action-gh-release@v3
+        if: runner.os == 'Windows' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'release')
         with:
           files: |
             SSMM-*-windows-*-setup.exe
-            SSMM-*-windows-*-portable.exe
+
+      - name: Upload macOS artifacts to Release
+        uses: softprops/action-gh-release@v3
+        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'release')
+        with:
+          files: |
             SSMM-*-macOS-*.dmg

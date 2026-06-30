@@ -15,7 +15,6 @@ import os
 import shutil
 
 import psutil
-import fitz
 import PIL
 import PySide6
 import toml
@@ -24,27 +23,29 @@ import imagehash
 import qdarktheme
 from PySide6.QtCore import (QItemSelection, QItemSelectionModel, QObject, Qt,
                             QTimer, QUrl, Signal, QStandardPaths)
-from PySide6.QtGui import (QAction, QColor, QDesktopServices, QMovie, QPalette,
-                           QTextCharFormat, QTextCursor, QShowEvent)
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QMovie,
+                           QPalette, QTextCharFormat, QTextCursor, QShowEvent)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
                                QDialog, QFileDialog, QGridLayout, QLabel,
                                QMenuBar, QMessageBox, QScrollArea, QStyle,
                                QVBoxLayout, QWidget)
 
-import config
-from ffmpeg_installer import FFmpegInstaller
-from models import (AppState, ProjectModel, ProjectParameters, Slide,
+from ssmm import app_settings
+from ssmm import config
+from ssmm import pdf_utils
+from ssmm.ffmpeg_installer import FFmpegInstaller
+from ssmm.models import (AppState, ProjectModel, ProjectParameters, Slide,
                     ValidationMessages)
-from settings_manager import SettingsManager
-from slide_table_manager import SlideTableManager
-from ui_dialogs import (EditSlidesDialog, InstallProgressDialog,
+from ssmm.settings_manager import SettingsManager
+from ssmm.slide_table_manager import SlideTableManager
+from ssmm.ui_dialogs import (EditSlidesDialog, InstallProgressDialog,
                         SelectSlideDialog, PageMappingDialog)
-from ui_main import Ui_MainWindow
-from ui_state_manager import UIStateManager
-from utils import (bundled_ffmpeg_exists, get_ffmpeg_path, get_ffmpeg_source,
+from ssmm.ui_main import Ui_MainWindow
+from ssmm.ui_state_manager import UIStateManager
+from ssmm.utils import (bundled_ffmpeg_exists, get_ffmpeg_path, get_ffmpeg_source,
                    resolve_resource_path)
-from validator import ProjectValidator
-from worker_manager import WorkerManager
+from ssmm.validator import ProjectValidator
+from ssmm.worker_manager import WorkerManager
 
 try:
     from capabilities import load_capabilities
@@ -178,6 +179,7 @@ class MainWindow(QWidget):
 
         self.gallery_window = None
         self.progress_dialog = None
+        self._pending_recent_path = None
         self.ffmpeg_installed = self.check_ffmpeg_exists()
         
         self.slide_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -200,10 +202,15 @@ class MainWindow(QWidget):
         if main_layout:
             main_layout.setMenuBar(self._create_menu_bar())
 
+        saved_geometry = app_settings.get_window_geometry()
+        if saved_geometry:
+            self.restoreGeometry(saved_geometry)
+
         self._setup_connections()
         
         self._setup_licenses_tab()
         self._setup_font_license_tab()
+        self._setup_thirdparty_license_tab()
         self._setup_disclaimer_tab()
         
         self._sync_model_to_ui()
@@ -233,6 +240,15 @@ class MainWindow(QWidget):
             action = self._next_startup_action
             self._next_startup_action = None
             action()
+
+    def on_transient_worker_busy(self, message: str):
+        # A transient task was requested while one was already running, so the new request
+        # was dropped. Its caller may have pushed a wait cursor that no finished-handler will
+        # pop; restore it and tell the user. The in-flight task keeps running and manages the
+        # app state itself, so we deliberately do not change the state machine here.
+        QApplication.restoreOverrideCursor()
+        self.write_debug(f"[WARNING] {message}")
+        QMessageBox.information(self, self.tr("Please Wait"), message)
 
     def on_worker_thread_finished(self):
         QApplication.restoreOverrideCursor()
@@ -264,9 +280,7 @@ class MainWindow(QWidget):
         path = self._project_path_on_startup
         if path.exists():
             self.write_debug(f"[INFO] Starting project setup from command line argument: {path}")
-            self.state_machine.transition_to(AppState.LOADING_PROJECT)
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.worker_manager.start_project_setup(self.settings_manager, self.validator, path)
+            self._start_project_load(path)
         else:
             self.write_debug(f"[ERROR] Path specified in command line argument not found: {path}")
             QMessageBox.warning(self, self.tr("File Not Found"), self.tr("The specified project path does not exist:\n{0}").format(path))
@@ -307,24 +321,24 @@ class MainWindow(QWidget):
         self.ffmpeg_build_config_text_edit.setVisible(True)
 
         try:
-            lgpl_path = resolve_resource_path("ffmpeg/LGPL.txt")
+            lgpl_path = resolve_resource_path("resources/ffmpeg/LGPL.txt")
             if lgpl_path.exists():
                 with open(lgpl_path, 'r', encoding='utf-8') as f:
                     self.ffmpeg_license_text_edit.setText(f.read())
             else:
-                self.ffmpeg_license_text_edit.setText("Bundled ffmpeg/LGPL.txt not found.")
+                self.ffmpeg_license_text_edit.setText(self.tr("Bundled ffmpeg/LGPL.txt not found."))
         except Exception as e:
-            self.ffmpeg_license_text_edit.setText(f"Error loading LGPL.txt: {e}")
+            self.ffmpeg_license_text_edit.setText(self.tr("Error loading LGPL.txt: {0}").format(e))
 
         try:
-            config_path = resolve_resource_path("ffmpeg/ffmpeg_build_config.txt")
+            config_path = resolve_resource_path("resources/ffmpeg/ffmpeg_build_config.txt")
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
                     self.ffmpeg_build_config_text_edit.setText(f.read())
             else:
-                self.ffmpeg_build_config_text_edit.setText("Bundled ffmpeg/ffmpeg_build_config.txt not found.")
+                self.ffmpeg_build_config_text_edit.setText(self.tr("Bundled ffmpeg/ffmpeg_build_config.txt not found."))
         except Exception as e:
-            self.ffmpeg_build_config_text_edit.setText(f"Error loading ffmpeg_build_config.txt: {e}")
+            self.ffmpeg_build_config_text_edit.setText(self.tr("Error loading ffmpeg_build_config.txt: {0}").format(e))
 
         if ffmpeg_source == 'system':
             self.system_ffmpeg_notice_label.setText(
@@ -338,15 +352,32 @@ class MainWindow(QWidget):
 
     def _setup_font_license_tab(self):
         try:
-            font_license_path = resolve_resource_path("fonts/OFL.txt")
+            font_license_path = resolve_resource_path("resources/fonts/OFL.txt")
             if font_license_path.exists():
                 with open(font_license_path, 'r', encoding='utf-8') as f:
                     self.font_license_text_edit.setText(f.read())
             else:
-                self.font_license_text_edit.setText("Font license file (OFL.txt) not found in resources.")
+                self.font_license_text_edit.setText(self.tr("Font license file (OFL.txt) not found in resources."))
         except Exception as e:
-            self.font_license_text_edit.setText(f"Error loading font license file: {e}")
+            self.font_license_text_edit.setText(self.tr("Error loading font license file: {0}").format(e))
             self.write_debug(f"Error loading font license: {e}")
+
+    def _setup_thirdparty_license_tab(self):
+        try:
+            licenses_path = resolve_resource_path("resources/licenses/THIRD_PARTY_LICENSES.txt")
+            if licenses_path.exists():
+                with open(licenses_path, 'r', encoding='utf-8') as f:
+                    self.thirdparty_license_text_edit.setText(f.read())
+            else:
+                self.thirdparty_license_text_edit.setText(self.tr(
+                    "The consolidated third-party library license notices are generated "
+                    "when the application is packaged for release. When running from source, "
+                    "see the 'Third-Party Components & Licenses' section in README.md, or the "
+                    "license files bundled with each installed package."
+                ))
+        except Exception as e:
+            self.thirdparty_license_text_edit.setText(self.tr("Error loading third-party license file: {0}").format(e))
+            self.write_debug(f"Error loading third-party licenses: {e}")
 
     def _setup_disclaimer_tab(self):
         disclaimer_text = self.tr(
@@ -380,16 +411,52 @@ class MainWindow(QWidget):
         self.load_settings_action.triggered.connect(self.load_settings)
         self.save_settings_action = QAction(self.tr("&Save Project Settings..."), self)
         self.save_settings_action.triggered.connect(self.save_settings)
+        self.import_dmj_action = QAction(self.tr("Import &DougaMeijin Project..."), self)
+        self.import_dmj_action.triggered.connect(self.import_dougameijin_project)
         exit_action = QAction(self.tr("E&xit"), self)
         exit_action.triggered.connect(self.close)
         file_menu.addActions([self.load_settings_action, self.save_settings_action])
         file_menu.addSeparator()
+        self.recent_menu = file_menu.addMenu(self.tr("Open &Recent"))
+        self._rebuild_recent_menu()
+        file_menu.addAction(self.import_dmj_action)
+        file_menu.addSeparator()
         file_menu.addAction(exit_action)
-        
+
         view_menu = menu_bar.addMenu(self.tr("&View"))
-        self.switch_theme_action = QAction(self.tr("Switch Theme"), self)
-        self.switch_theme_action.triggered.connect(self._switch_theme)
-        view_menu.addAction(self.switch_theme_action)
+        theme_menu = view_menu.addMenu(self.tr("Theme"))
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        theme_options = [
+            ("system", self.tr("System Default")),
+            ("light", self.tr("Light")),
+            ("dark", self.tr("Dark")),
+        ]
+        active_theme = app_settings.get_theme()
+        for code, label in theme_options:
+            action = QAction(label, self, checkable=True)
+            action.setChecked(code == active_theme)
+            action.triggered.connect(lambda checked, c=code: self._change_theme(c))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+
+        language_menu = view_menu.addMenu(self.tr("Language"))
+        self._active_language = app_settings.get_language()
+        language_group = QActionGroup(self)
+        language_group.setExclusive(True)
+        # Native-name labels (English / 日本語) are intentionally not translated;
+        # "System Default" is, since it describes a behavior rather than a language.
+        language_options = [
+            ("system", self.tr("System Default")),
+            ("en", "English"),
+            ("ja", "日本語"),
+        ]
+        for code, label in language_options:
+            action = QAction(label, self, checkable=True)
+            action.setChecked(code == self._active_language)
+            action.triggered.connect(lambda checked, c=code: self._change_language(c))
+            language_group.addAction(action)
+            language_menu.addAction(action)
 
         tools_menu = menu_bar.addMenu(self.tr("&Tools"))
         if self.capabilities.get("FFMPEG_INSTALL_MENU", True):
@@ -412,13 +479,65 @@ class MainWindow(QWidget):
         
         return menu_bar
 
-    def _switch_theme(self):
-        new_theme = "light" if self.current_theme == "dark" else "dark"
-        QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet(new_theme))
-        self.current_theme = new_theme
+    def _change_theme(self, code):
+        # Unlike language, theme changes apply immediately: qdarktheme only swaps
+        # the application stylesheet, so no UI re-translation is needed.
+        QApplication.instance().setStyleSheet(
+            qdarktheme.load_stylesheet(app_settings.theme_to_stylesheet_arg(code)))
+        app_settings.set_theme(code)
+
+        if code in ("light", "dark"):
+            self.current_theme = code
+        else:
+            # "system": resolve the concrete appearance from the palette.
+            text_color = self.palette().color(QPalette.ColorRole.WindowText)
+            self.current_theme = "dark" if text_color.lightness() > 128 else "light"
 
         if self.last_validation_messages:
             self.validation_results_text.setHtml(self.last_validation_messages.assemble_html(theme=self.current_theme))
+
+    def _rebuild_recent_menu(self):
+        self.recent_menu.clear()
+        recent = app_settings.get_recent_projects()
+        if not recent:
+            placeholder = self.recent_menu.addAction(self.tr("(No Recent Projects)"))
+            placeholder.setEnabled(False)
+            return
+        for path_str in recent:
+            action = QAction(Path(path_str).name, self)
+            action.setToolTip(path_str)
+            action.triggered.connect(lambda checked, p=path_str: self._open_recent_project(p))
+            self.recent_menu.addAction(action)
+        self.recent_menu.addSeparator()
+        clear_action = self.recent_menu.addAction(self.tr("Clear Recent List"))
+        clear_action.triggered.connect(self._clear_recent_projects)
+
+    def _clear_recent_projects(self):
+        app_settings.clear_recent_projects()
+        self._rebuild_recent_menu()
+
+    def _open_recent_project(self, path_str):
+        path = Path(path_str)
+        if not path.exists():
+            QMessageBox.warning(
+                self, self.tr("Project Not Found"),
+                self.tr("The project could not be found and will be removed from the recent list:\n\n{0}").format(path_str)
+            )
+            self._rebuild_recent_menu()
+            return
+        self._start_project_load(path)
+
+    def _change_language(self, code):
+        app_settings.set_language(code)
+        # The effective language only changes at startup (UI strings are fixed at
+        # construction), so prompt for a restart only when the selection differs
+        # from the language currently in effect.
+        if code == self._active_language:
+            return
+        QMessageBox.information(
+            self, self.tr("Language"),
+            self.tr("The language change will take effect after you restart the application.")
+        )
 
     def _open_repository_url(self):
         url = QUrl(config.REPO_URL)
@@ -451,7 +570,8 @@ class MainWindow(QWidget):
             self.codec_combo.addItems(available_codecs)
             self.codec_combo.setEnabled(True)
         else:
-            self.codec_combo.addItem(self.tr("No Encoders Found"))
+            # currentText() feeds params.codec, so keep this placeholder English (not a real codec).
+            self.codec_combo.addItem("No Encoders Found")
             self.codec_combo.setEnabled(False)
         self.codec_combo.blockSignals(False)
 
@@ -472,12 +592,13 @@ class MainWindow(QWidget):
             7: self.tr("7 (7.0 Surround)"),
             8: self.tr("8 (7.1 Surround)")
         }
-        for i in range(1, 9):
+        ch_low, ch_high = config.AUDIO_CHANNELS_RANGE
+        for i in range(ch_low, ch_high + 1):
             text = channel_labels.get(i, str(i))
             self.audio_channels_combo.addItem(text, userData=i)
         
         self.watermark_color_combo.clear()
-        self.watermark_color_combo.addItems(config.WATERMARK_COLOR_OPTIONS_RGBA.keys())
+        self.watermark_color_combo.addItems(config.WATERMARK_COLOR_OPTIONS_RGB.keys())
         
         self.watermark_fontfamily_combo.clear()
         self.watermark_fontfamily_combo.addItems(list(config.BUNDLED_FONTS.keys()))
@@ -510,6 +631,8 @@ class MainWindow(QWidget):
 
             for option in sorted_options:
                 if option == "None":
+                    # Sits beside raw encoder codes (e.g. nvenc/qsv) and maps to
+                    # userData=None; keep the label untranslated as a setting value.
                     self.hardware_encoding_combo.addItem("None", userData=None)
                 elif option == "videotoolbox":
                     self.hardware_encoding_combo.addItem(self.tr("Enabled (Apple Hardware)"), userData="videotoolbox")
@@ -581,6 +704,7 @@ class MainWindow(QWidget):
         self.worker_manager.validation_error.connect(self.on_validation_error)
         self.worker_manager.validation_canceled.connect(self.on_validation_canceled)
         self.worker_manager.transient_worker_finished.connect(self.on_transient_worker_finished)
+        self.worker_manager.transient_worker_busy.connect(self.on_transient_worker_busy)
         param_widgets_on_change = [
             self.resolution_combo, self.fps_combo, self.hardware_encoding_combo, self.pass_combo,
             self.audio_bitrate_combo, self.audio_sample_rate_combo, self.audio_channels_combo,
@@ -705,7 +829,7 @@ class MainWindow(QWidget):
 
         libs_info_lines = ["----------------- Library Versions -----------------"]
         libs_to_check = {
-            "PyMuPDF": fitz,
+            "pypdfium2": pdf_utils.pypdfium2_version(),
             "Pillow": PIL,
             "PySide6": PySide6,
             "toml": toml,
@@ -713,7 +837,7 @@ class MainWindow(QWidget):
         }
         for name, lib in libs_to_check.items():
             try:
-                version = getattr(lib, '__version__', 'N/A')
+                version = lib if isinstance(lib, str) else getattr(lib, '__version__', 'N/A')
                 libs_info_lines.append(f"  {name}: {version}")
             except Exception:
                 libs_info_lines.append(f"  {name}: Error getting version")
@@ -823,6 +947,8 @@ class MainWindow(QWidget):
         if self._is_syncing:
             return
         self._sync_ui_to_model()
+        # Reflect watermark changes in the slide-list thumbnails immediately.
+        self.slide_table_manager.refresh_all_thumbnails()
 
     def _on_preview_toggled(self, is_checked: bool):
         self.slide_table_manager.toggle_previews(is_checked)
@@ -838,17 +964,27 @@ class MainWindow(QWidget):
         self.pass_combo.setEnabled(True)
 
         if mode == config.ENCODING_MODES["QUALITY"]:
-            self.value_label.setText(self.tr("Quality (0-51):"))
             self.value_spin.setSuffix("")
-            self.value_spin.setRange(0, 51)
             self.value_spin.setSingleStep(1)
-            self.value_spin.setValue(config.DEFAULT_CRF_VALUE)
+            if selected_codec == 'MPEG-4 Part 2':
+                # mpeg4 uses qscale (1-31), not CRF (0-51).
+                low, high = config.ENCODING_MPEG4_QSCALE_RANGE
+                self.value_label.setText(self.tr("Quality ({0}-{1}):").format(low, high))
+                self.value_spin.setRange(low, high)
+                self.value_spin.setValue(max(low, min(high, config.DEFAULT_CRF_VALUE)))
+            else:
+                self.value_label.setText(self.tr("Quality (0-51):"))
+                self.value_spin.setRange(*config.ENCODING_CRF_RANGE)
+                self.value_spin.setValue(config.DEFAULT_CRF_VALUE)
             if is_videotoolbox:
                 self.encoding_mode_combo.blockSignals(True)
                 try:
                     self.encoding_mode_combo.setCurrentText(config.ENCODING_MODES["VBR"])
                 finally:
                     self.encoding_mode_combo.blockSignals(False)
+                # Re-run to reconfigure the spinbox for the VBR mode.
+                self.update_encoding_options()
+                return
             else:
                  self.pass_combo.setEnabled(False)
         
@@ -912,13 +1048,30 @@ class MainWindow(QWidget):
                 self.installer_thread.wait()
                 self.installer_thread = None
         
+    def _start_project_load(self, path: Path):
+        # Single entry point for all project loads (folder, .toml, .dmj). The
+        # path is remembered so it can be added to the recent list on success.
+        self._pending_recent_path = path
+        self.validator.clear_cache()
+        self.state_machine.transition_to(AppState.LOADING_PROJECT)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.worker_manager.start_project_setup(self.settings_manager, self.validator, path)
+
     def load_settings(self):
         file_to_load = self.settings_manager.prompt_for_load_path()
         if file_to_load:
-            self.validator.clear_cache()
-            self.state_machine.transition_to(AppState.LOADING_PROJECT)
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.worker_manager.start_project_setup(self.settings_manager, self.validator, file_to_load)
+            self._start_project_load(file_to_load)
+
+    def import_dougameijin_project(self):
+        file_to_load = self.settings_manager.prompt_for_dmj_path()
+        if not file_to_load:
+            return
+        # Let the user pick where to extract, so nothing is left next to the .dmj.
+        extract_dir = self.settings_manager.prompt_for_dmj_extract_dir(file_to_load)
+        if not extract_dir:
+            return
+        self.settings_manager.pending_dmj_extract_dir = extract_dir
+        self._start_project_load(file_to_load)
 
     def on_project_setup_finished(self, loaded_model: ProjectModel):
         if not loaded_model:
@@ -937,13 +1090,19 @@ class MainWindow(QWidget):
         self.has_validated_once = False
         self.validation_results_text.setHtml("")
         
-        # First, populate the UI with the loaded data.
+        # Populate the UI with the loaded data.
         self.slide_table_manager.populate_slide_table_from_model()
         self.slide_table_manager.toggle_previews(self.preview_pinp_checkbox.isChecked())
 
         if not self.filename_input.text() and self.project_model.project_folder:
             self.filename_input.setText(self.project_model.project_folder.name)
-        
+
+        # Record the successfully loaded project in the recent list.
+        if self._pending_recent_path:
+            app_settings.add_recent_project(str(self._pending_recent_path))
+            self._pending_recent_path = None
+            self._rebuild_recent_menu()
+
         self.state_machine.transition_to(AppState.PROJECT_LOADED_UIPOPULATED)
 
     def on_project_setup_error(self, title, message):
@@ -1116,8 +1275,6 @@ class MainWindow(QWidget):
         
         self.slide_table_manager.populate_slide_table_from_model()
         self.slide_table_manager.toggle_previews(self.preview_pinp_checkbox.isChecked())
-        
-        self.on_worker_thread_finished()
 
     def on_validation_error(self, error_message: str):
         QMessageBox.critical(self, self.tr("Validation Error"), error_message)
@@ -1259,19 +1416,18 @@ class MainWindow(QWidget):
         if force_folder:
             folder_path = force_folder
         else:
-            default_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+            documents_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+            default_dir = app_settings.get_last_dir("project", documents_dir)
             folder_str = QFileDialog.getExistingDirectory(self, self.tr("Select Project Folder"), dir=default_dir)
             if folder_str:
                 folder_path = Path(folder_str)
+                app_settings.set_last_dir("project", folder_str)
 
         if not folder_path:
             return
 
         self.write_debug(f"[INFO] Project folder selected: {folder_path}")
-        self.validator.clear_cache()
-        self.state_machine.transition_to(AppState.LOADING_PROJECT)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.worker_manager.start_project_setup(self.settings_manager, self.validator, folder_path)
+        self._start_project_load(folder_path)
 
     def initialize_project_from_pdf(self, project_model: ProjectModel) -> Path | None:
         if not project_model.project_folder:
@@ -1282,8 +1438,7 @@ class MainWindow(QWidget):
             return None
 
         try:
-            with fitz.open(pdf_path) as doc:
-                page_count = doc.page_count
+            page_count = pdf_utils.page_count(pdf_path)
             project_model.slides = [Slide() for _ in range(page_count)]
             project_model.available_materials = sorted([
                 p.name for p in project_model.project_folder.iterdir()
@@ -1302,7 +1457,8 @@ class MainWindow(QWidget):
                     project_model.slides[slide_index].filename = material_name
 
     def select_output_folder(self):
-        folder_str = QFileDialog.getExistingDirectory(self, self.tr("Select Output Folder"))
+        default_dir = app_settings.get_last_dir("output", "")
+        folder_str = QFileDialog.getExistingDirectory(self, self.tr("Select Output Folder"), dir=default_dir)
         if not folder_str:
             return
 
@@ -1317,6 +1473,7 @@ class MainWindow(QWidget):
             )
             return
 
+        app_settings.set_last_dir("output", folder_str)
         self.write_debug(f"[INFO] Output folder selected: {selected_folder}")
         self.project_model.output_folder = selected_folder
         self.ui_manager.update_folder_label(self.output_folder_label, self.project_model.output_folder)
@@ -1354,7 +1511,7 @@ class MainWindow(QWidget):
             grid_layout.setSpacing(10)
             scroll_area.setWidget(container_widget)
             
-            agif_folder = resolve_resource_path("agif")
+            agif_folder = resolve_resource_path("resources/agif")
             col_count = 3
             row, col = 0, 0
             
@@ -1393,8 +1550,6 @@ class MainWindow(QWidget):
             if reply == QMessageBox.No:
                 event.ignore()
                 return
-            else:
-                self.worker_manager.cancel_all_tasks()
         else:
             if self.has_validated_once and current_state in [AppState.READY_TO_VALIDATE, AppState.PREPARE_TO_VALIDATE]:
                 reply = QMessageBox.question(
@@ -1404,7 +1559,18 @@ class MainWindow(QWidget):
                 if reply == QMessageBox.No:
                     event.ignore()
                     return
-        
+
+        # The user has committed to closing; persist the window geometry.
+        app_settings.set_window_geometry(self.saveGeometry())
+
+        # Stop and join every background thread before the window is destroyed.
+        self.worker_manager.cancel_all_tasks()
+        self.worker_manager.shutdown_transient_worker()
+
+        if self.installer_thread and self.installer_thread.isRunning():
+            self.installer_thread.quit()
+            self.installer_thread.wait(5000)
+
         self.worker_manager.shutdown_persistent_workers()
 
         event.accept()
@@ -1623,7 +1789,14 @@ class MainWindow(QWidget):
         current_pdf_hash = self.validator._get_file_hash(pdf_path)
         current_pdf_structure = self.validator._get_pdf_structure(pdf_path)
         
-        if self.validator.validated_pdf_hash and self.validator.validated_pdf_hash == current_pdf_hash:
+        # A matching hash means the PDF is byte-for-byte unchanged. Still require the
+        # in-memory slide count to match the PDF's page count before skipping analysis:
+        # a hand-edited or desynced TOML can carry a slide count that differs from the
+        # PDF it points at, and skipping here would let that mismatch reach rendering
+        # (KeyError on missing page images, or pages with no slide).
+        if (self.validator.validated_pdf_hash
+                and self.validator.validated_pdf_hash == current_pdf_hash
+                and len(self.project_model.slides) == current_pdf_structure.get('page_count', 0)):
             self.write_debug("[INFO] PDF file has not changed. Skipping detailed PDF change analysis.")
             return True
 
@@ -1679,8 +1852,7 @@ class MainWindow(QWidget):
         self.project_model.slides.clear()
         
         try:
-            with fitz.open(pdf_path) as doc:
-                page_count = doc.page_count
+            page_count = pdf_utils.page_count(pdf_path)
             self.project_model.slides = [Slide() for _ in range(page_count)]
             self._rescan_available_materials()
             
@@ -1688,7 +1860,7 @@ class MainWindow(QWidget):
             
             self.slide_table_manager.populate_slide_table_from_model()
         except Exception as e:
-            QMessageBox.critical(self, self.tr("Error Initializing Project"), f"Could not process the PDF file: {e}")
+            QMessageBox.critical(self, self.tr("Error Initializing Project"), self.tr("Could not process the PDF file: {0}").format(e))
             self._cancel_folder_selection()
 
     def _migrate_slide_data(self, pdf_path: Path) -> bool:
@@ -1697,7 +1869,7 @@ class MainWindow(QWidget):
         
         new_pdf_details, error = self.validator.get_pdf_details(pdf_path)
         if error:
-            QMessageBox.critical(self, self.tr("Migration Error"), f"Could not get details from the new PDF: {error}")
+            QMessageBox.critical(self, self.tr("Migration Error"), self.tr("Could not get details from the new PDF: {0}").format(error))
             return False
 
         if not new_pdf_details:
@@ -1705,7 +1877,7 @@ class MainWindow(QWidget):
             return False
 
         if not self._start_pdf_migration(old_slides, new_pdf_details):
-            # User cancelled the migration dialog, revert to old state
+            # User cancelled the migration dialog.
             self.project_model.slides = old_slides
             self.slide_table_manager.populate_slide_table_from_model()
             self._cancel_folder_selection()
