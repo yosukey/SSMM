@@ -503,8 +503,11 @@ class MainWindow(QWidget):
             placeholder = self.recent_menu.addAction(self.tr("(No Recent Projects)"))
             placeholder.setEnabled(False)
             return
+        fm = self.fontMetrics()
+        max_width = int(self.screen().availableGeometry().width() * 0.5) if self.screen() else 600
         for path_str in recent:
-            action = QAction(Path(path_str).name, self)
+            label = fm.elidedText(path_str, Qt.ElideMiddle, max_width)
+            action = QAction(label.replace("&", "&&"), self)
             action.setToolTip(path_str)
             action.triggered.connect(lambda checked, p=path_str: self._open_recent_project(p))
             self.recent_menu.addAction(action)
