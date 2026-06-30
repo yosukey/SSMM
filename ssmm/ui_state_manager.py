@@ -1,6 +1,6 @@
 # ui_state_manager.py
-from PySide6.QtCore import Qt
-from models import AppState, ProjectModel, ProjectParameters
+from PySide6.QtCore import Qt, QCoreApplication
+from ssmm.models import AppState, ProjectModel, ProjectParameters
 
 class UIStateManager:
 
@@ -16,7 +16,9 @@ class UIStateManager:
             self.main_window.select_all_button, self.main_window.select_video_button, self.main_window.select_audio_button,
             self.main_window.delete_temp_checkbox, self.main_window.append_duration_checkbox, self.main_window.filename_input,
             self.main_window.load_settings_action, self.main_window.save_settings_action,
-            self.main_window.install_ffmpeg_action, self.main_window.show_gallery_action
+            self.main_window.import_dmj_action,
+            # install_ffmpeg_action may be absent; default to None so the disable loop skips it.
+            getattr(self.main_window, 'install_ffmpeg_action', None), self.main_window.show_gallery_action
         ]
         debug_controls = [self.main_window.clear_debug_button, self.main_window.export_debug_button, self.main_window.verbose_debug_checkbox]
 
@@ -25,7 +27,7 @@ class UIStateManager:
 
         self.main_window.cancel_button.setEnabled(False)
         self.main_window.edit_selection_button.setEnabled(False)
-        self.main_window.validation_button.setText(self.main_window.tr("Check Files"))
+        self.main_window.validation_button.setText(QCoreApplication.translate("MainWindow", "Check Files"))
 
         status_message = ""
         
@@ -39,27 +41,29 @@ class UIStateManager:
         
         if new_state == AppState.CHECKING_ENCODERS:
             self.main_window.show_gallery_action.setEnabled(True)
-            status_message = self.main_window.tr("Performing initial check of available encoders...")
+            status_message = QCoreApplication.translate("MainWindow", "Performing initial check of available encoders...")
         
         elif new_state == AppState.AWAITING_PROJECT:
             self.main_window.select_project_folder_button.setEnabled(True)
             self.main_window.load_settings_action.setEnabled(True)
+            self.main_window.import_dmj_action.setEnabled(True)
             self.main_window.show_gallery_action.setEnabled(True)
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
-            status_message = self.main_window.tr("Please select the project folder to begin.")
+            status_message = QCoreApplication.translate("MainWindow", "Please select the project folder to begin.")
         
         elif new_state == AppState.LOADING_PROJECT:
             self.main_window.show_gallery_action.setEnabled(True)
-            status_message = self.main_window.tr("Loading project and scanning material files...")
+            status_message = QCoreApplication.translate("MainWindow", "Loading project and scanning material files...")
 
         elif new_state == AppState.PROJECT_LOADED_UIPOPULATED:
-            status_message = self.main_window.tr("Project loaded. Verifying PDF structure...")
+            status_message = QCoreApplication.translate("MainWindow", "Project loaded. Verifying PDF structure...")
             self.main_window.show_gallery_action.setEnabled(True)
 
         elif new_state == AppState.PREPARE_TO_VALIDATE:
             self.main_window.select_project_folder_button.setEnabled(True)
             self.main_window.load_settings_action.setEnabled(True)
+            self.main_window.import_dmj_action.setEnabled(True)
             self.main_window.show_gallery_action.setEnabled(True)
             self.main_window.select_output_button.setEnabled(True)
             self.main_window.slide_table.setEnabled(True)
@@ -68,11 +72,12 @@ class UIStateManager:
                            self.main_window.delete_temp_checkbox, self.main_window.append_duration_checkbox, self.main_window.filename_input,
                            self.main_window.parameters_tabs, self.main_window.reset_parameters_button]:
                 widget.setEnabled(True)
-            status_message = self.main_window.tr("Please select the output folder to enable validation.")
+            status_message = QCoreApplication.translate("MainWindow", "Please select the output folder to enable validation.")
 
         elif new_state == AppState.READY_TO_VALIDATE:
             self.main_window.select_project_folder_button.setEnabled(True)
             self.main_window.load_settings_action.setEnabled(True)
+            self.main_window.import_dmj_action.setEnabled(True)
             self.main_window.show_gallery_action.setEnabled(True)
             self.main_window.select_output_button.setEnabled(True)
             self.main_window.slide_table.setEnabled(True)
@@ -83,31 +88,31 @@ class UIStateManager:
                 widget.setEnabled(True)
             
             if self.main_window.has_validated_once:
-                status_message = self.main_window.tr("Settings have changed. Please click 'Check Files' to re-validate.")
+                status_message = QCoreApplication.translate("MainWindow", "Settings have changed. Please click 'Check Files' to re-validate.")
             else:
-                status_message = self.main_window.tr("Ready to validate. Please click 'Check Files' to proceed.")
+                status_message = QCoreApplication.translate("MainWindow", "Ready to validate. Please click 'Check Files' to proceed.")
 
         elif new_state == AppState.VALIDATING:
             self.main_window.cancel_button.setEnabled(True)
             self.main_window.show_gallery_action.setEnabled(True)
-            self.main_window.validation_button.setText(self.main_window.tr("Checking..."))
-            status_message = self.main_window.tr("Validating project files, please wait...")
+            self.main_window.validation_button.setText(QCoreApplication.translate("MainWindow", "Checking..."))
+            status_message = QCoreApplication.translate("MainWindow", "Validating project files, please wait...")
 
         elif new_state == AppState.VALIDATED:
             for control in all_controls:
                 if control: control.setEnabled(True)
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
-            status_message = self.main_window.tr("Validation successful. Ready to create video.")
+            status_message = QCoreApplication.translate("MainWindow", "Validation successful. Ready to create video.")
 
         elif new_state == AppState.PROCESSING:
             self.main_window.cancel_button.setEnabled(True)
             self.main_window.show_gallery_action.setEnabled(True)
-            status_message = self.main_window.tr("Processing video, please wait...")
+            status_message = QCoreApplication.translate("MainWindow", "Processing video, please wait...")
         
         elif new_state == AppState.CANCELLING:
             self.main_window.show_gallery_action.setEnabled(True)
-            status_message = self.main_window.tr("Cancelling process...")
+            status_message = QCoreApplication.translate("MainWindow", "Cancelling process...")
 
         elif new_state == AppState.ERROR:
             status_message = self.main_window._ffmpeg_missing_message()

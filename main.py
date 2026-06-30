@@ -21,8 +21,9 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt, QTimer
 import qdarktheme
-from main_window import MainWindow, EmittingStream
-from utils import resolve_resource_path
+from ssmm.main_window import MainWindow, EmittingStream
+from ssmm.utils import resolve_resource_path, install_translators
+from ssmm import app_settings
 
 MIN_PYTHON_VERSION = (3, 10)
 
@@ -98,7 +99,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet("auto"))
+    # Identify the app so QStandardPaths/QSettings resolve to a stable per-app location.
+    app.setOrganizationName("SSMM")
+    app.setApplicationName("SSMM")
+    theme_arg = app_settings.theme_to_stylesheet_arg(app_settings.get_theme())
+    QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet(theme_arg))
+    # Install before MainWindow is built so its tr() strings resolve at construction.
+    translators = install_translators(app)
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
@@ -112,7 +119,7 @@ if __name__ == "__main__":
         if SHOULD_SHOW_SPLASH:
             if not is_pyinstaller_bundle:
                 try:
-                    splash_pix = QPixmap(str(resolve_resource_path("assets/splash_screen.png")))
+                    splash_pix = QPixmap(str(resolve_resource_path("resources/assets/splash_screen.png")))
                     if not splash_pix.isNull():
                         splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
                         splash.show()
@@ -132,7 +139,7 @@ if __name__ == "__main__":
             QTimer.singleShot(4000, manager.set_timer_done)
 
         try:
-            icon_path = resolve_resource_path("assets/app_icon.png")
+            icon_path = resolve_resource_path("resources/assets/app_icon.png")
             if icon_path.exists():
                 app_icon = QIcon(str(icon_path))
                 window.setWindowIcon(app_icon)

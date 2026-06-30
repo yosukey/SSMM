@@ -4,17 +4,18 @@ from functools import partial
 from contextlib import contextmanager
 from typing import Callable
 
-from PySide6.QtWidgets import (QTableWidget, QLabel, QComboBox, QLineEdit, 
+from PySide6.QtWidgets import (QTableWidget, QLabel, QComboBox, QLineEdit,
                                QSpinBox, QTableWidgetItem, QHeaderView, QMessageBox,
-                               QWidget, QVBoxLayout, QPushButton, QDialog)
+                               QWidget, QPushButton, QDialog)
 from PySide6.QtCore import QObject, Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
-import config
-from models import ProjectModel, Slide
-from validator import ProjectValidator
-from ui_helpers import calculate_pinp_geometry, superimpose_pinp_info
-from ui_dialogs import EditEffectsDialog
+from ssmm import config
+from ssmm.models import ProjectModel, Slide
+from ssmm.validator import ProjectValidator
+from ssmm.ui_helpers import calculate_pinp_geometry, superimpose_pinp_info, render_pdf_page_to_pixmap, superimpose_watermark
+from ssmm.ui_main import wrap_cell_widget, ClickableLabel, NoWheelComboBox, NoWheelSpinBox
+from ssmm.ui_dialogs import EditEffectsDialog, SlidePreviewDialog, MediaPlayerDialog
 
 @contextmanager
 def block_signals(widget: QWidget):
@@ -31,14 +32,15 @@ class SlideTableManager(QObject):
 
     COL_THUMBNAIL = 0
     COL_MATERIAL = 1
-    COL_DURATION = 2
-    COL_AUDIO_STREAM = 3
-    COL_CHAPTER = 4
-    COL_PINP_POS = 5
-    COL_PINP_SCALE = 6
-    COL_PINP_EFFECT = 7
-    COL_INTERVAL = 8
-    COL_TRANSITION = 9
+    COL_PREVIEW = 2
+    COL_DURATION = 3
+    COL_AUDIO_STREAM = 4
+    COL_CHAPTER = 5
+    COL_PINP_POS = 6
+    COL_PINP_SCALE = 7
+    COL_PINP_EFFECT = 8
+    COL_INTERVAL = 9
+    COL_TRANSITION = 10
 
     def __init__(self, table: QTableWidget, total_duration_label: QLabel, project_model: ProjectModel, validator: ProjectValidator, parent=None):
         super().__init__(parent)
@@ -52,12 +54,7 @@ class SlideTableManager(QObject):
         self.timers = {}
 
     def _create_centered_widget(self, widget: QWidget) -> QWidget:
-        container_widget = QWidget()
-        layout = QVBoxLayout(container_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setAlignment(Qt.AlignCenter)
-        layout.addWidget(widget)
-        return container_widget
+        return wrap_cell_widget(widget)
 
     def _populate_combo_with_tooltips(self, combo: QComboBox, items: list[str]):
         combo.clear()
@@ -80,6 +77,9 @@ class SlideTableManager(QObject):
 
     def toggle_previews(self, enabled: bool):
         self.previews_enabled = enabled
+        self.refresh_all_thumbnails()
+
+    def refresh_all_thumbnails(self):
         for i in range(self.table.rowCount()):
             self.update_thumbnail_for_row(i)
 
@@ -88,25 +88,79 @@ class SlideTableManager(QObject):
             return
 
         slide = self.project_model.slides[row_index]
+        params = self.project_model.parameters
         base_pixmap = self.thumbnail_cache[row_index]
         final_pixmap = base_pixmap
 
-        res_str = self.project_model.parameters.resolution
+        res_str = params.resolution
         output_width, output_height = map(int, res_str.split('x'))
 
         if self.previews_enabled and slide.is_video:
             final_pixmap = superimpose_pinp_info(base_pixmap, slide, output_width, output_height)
 
+        # The watermark is global, so apply it to every slide type whenever it is enabled,
+        # independently of the PinP preview toggle.
+        if params.add_watermark and params.watermark_text:
+            final_pixmap = superimpose_watermark(final_pixmap, params)
+
         thumb_label = self.table.cellWidget(row_index, self.COL_THUMBNAIL)
         if isinstance(thumb_label, QLabel):
             thumb_label.setPixmap(final_pixmap.scaledToHeight(110, Qt.SmoothTransformation))
+
+    def _on_thumbnail_double_clicked(self, row_index: int):
+        if not (0 <= row_index < len(self.project_model.slides)):
+            return
+
+        pdf_path = None
+        if self.project_model.project_folder:
+            pdf_path = next(self.project_model.project_folder.glob('*.[pP][dD][fF]'), None)
+
+        try:
+            target_width = int(self.project_model.parameters.resolution.split('x')[0])
+        except (ValueError, AttributeError, IndexError):
+            target_width = 1920
+
+        pixmap = render_pdf_page_to_pixmap(pdf_path, row_index, target_width)
+        if pixmap is None:
+            # Fall back to the cached thumbnail if the PDF could not be re-rendered.
+            pixmap = self.thumbnail_cache.get(row_index)
+
+        params = self.project_model.parameters
+        if pixmap is not None and params.add_watermark and params.watermark_text:
+            pixmap = superimpose_watermark(pixmap, params)
+
+        dialog = SlidePreviewDialog(pixmap, row_index + 1, parent=self.table)
+        dialog.exec()
+
+    def _on_play_material_clicked(self, row_index: int):
+        if not (0 <= row_index < len(self.project_model.slides)):
+            return
+        slide = self.project_model.slides[row_index]
+
+        if not (slide.filename and slide.filename != config.SILENT_MATERIAL_NAME):
+            return
+        if not self.project_model.project_folder:
+            return
+
+        material_path = self.project_model.project_folder / slide.filename
+        if not material_path.is_file():
+            QMessageBox.warning(
+                self.table,
+                self.tr("Playback Error"),
+                self.tr("The material file could not be found:\n{path}").format(path=material_path),
+            )
+            return
+
+        is_video = slide.is_video or slide.filename.lower().endswith(config.SUPPORTED_VIDEO_FORMATS)
+        dialog = MediaPlayerDialog(material_path, is_video, parent=self.table)
+        dialog.exec()
 
     def _build_slide_table(self):
         with block_signals(self.table):
             self.clear_caches()
             self.table.clearContents()
             
-            headers = ['Thumbnail', 'Material', 'Duration', 'Audio Stream', 'Chapter Title', 'PinP\nPosition', 'PinP Scale\n(% of Height)', 'PinP\nEffect', 'Interval\nto Next (sec)', 'Transition\nto Next']
+            headers = ['Thumbnail', 'Material', 'Play', 'Duration', 'Audio Stream', 'Chapter Title', 'PinP Position', 'PinP Scale (% of Height)', 'PinP Effect', 'Interval to Next (sec)', 'Transition to Next']
             self.table.setColumnCount(len(headers))
             self.table.setHorizontalHeaderLabels(headers)
             self.table.setRowCount(len(self.project_model.slides))
@@ -114,27 +168,29 @@ class SlideTableManager(QObject):
             all_material_choices = [config.SILENT_MATERIAL_NAME] + self.project_model.available_materials
 
             for idx, slide in enumerate(self.project_model.slides):
-                # Thumbnail (Column 0) - Modified to use Base64 cache from Slide model
+                # Thumbnail (Column 0): Base64 cache from the Slide model
                 if slide.thumbnail_b64:
                     try:
-                        # Decode the Base64 string and create a QPixmap
+                        # Decode the Base64 string into a QPixmap
                         byte_data = base64.b64decode(slide.thumbnail_b64)
                         qimage = QImage.fromData(byte_data, "PNG")
                         pixmap = QPixmap.fromImage(qimage)
                         self.thumbnail_cache[idx] = pixmap
 
-                        thumb_label = QLabel()
+                        thumb_label = ClickableLabel()
                         thumb_label.setPixmap(pixmap.scaledToHeight(110, Qt.SmoothTransformation))
                         thumb_label.setAlignment(Qt.AlignCenter)
+                        thumb_label.setToolTip(self.tr("Double-click to enlarge"))
+                        thumb_label.doubleClicked.connect(partial(self._on_thumbnail_double_clicked, idx))
                         self.table.setCellWidget(idx, self.COL_THUMBNAIL, thumb_label)
                     except Exception as e:
                         self.log_message.emit(f"[ERROR] Failed to load thumbnail for slide {idx+1}: {e}")
-                        self.table.setItem(idx, self.COL_THUMBNAIL, QTableWidgetItem("Thumb Err"))
+                        self.table.setItem(idx, self.COL_THUMBNAIL, QTableWidgetItem(self.tr("Thumb Err")))
                 else:
-                    self.table.setItem(idx, self.COL_THUMBNAIL, QTableWidgetItem("No Thumb"))
+                    self.table.setItem(idx, self.COL_THUMBNAIL, QTableWidgetItem(self.tr("No Thumb")))
                 
                 # Material ComboBox (Column 1)
-                material_combo = QComboBox()
+                material_combo = NoWheelComboBox()
                 if slide.filename is None:
                     current_choices = [config.UNASSIGNED_MATERIAL_NAME] + all_material_choices
                     self._populate_combo_with_tooltips(material_combo, current_choices)
@@ -155,17 +211,17 @@ class SlideTableManager(QObject):
                 # Chapter Title (Column 4)
                 chapter_edit = QLineEdit(slide.chapter_title)
                 chapter_edit.editingFinished.connect(partial(self.on_table_item_changed, idx, "chapter_title", chapter_edit))
-                self.table.setCellWidget(idx, self.COL_CHAPTER, chapter_edit)
+                self.table.setCellWidget(idx, self.COL_CHAPTER, self._create_centered_widget(chapter_edit))
 
                 # Interval and Transition (Columns 8, 9)
                 if idx < len(self.project_model.slides) - 1:
-                    interval_spin = QSpinBox()
+                    interval_spin = NoWheelSpinBox()
                     interval_spin.setRange(0, 300)
                     interval_spin.setValue(slide.interval_to_next)
                     interval_spin.valueChanged.connect(partial(self.on_table_item_changed, idx, "interval_to_next", interval_spin))
                     self.table.setCellWidget(idx, self.COL_INTERVAL, self._create_centered_widget(interval_spin))
 
-                    trans_combo = QComboBox()
+                    trans_combo = NoWheelComboBox()
                     self._populate_combo_with_tooltips(trans_combo, list(config.TRANSITION_MAPPINGS.keys()))
                     trans_combo.setCurrentText(slide.transition_to_next)
                     trans_combo.currentTextChanged.connect(partial(self.on_table_item_changed, idx, "transition_to_next", trans_combo))
@@ -182,7 +238,7 @@ class SlideTableManager(QObject):
                         self.table.setItem(idx, col, item)
 
             header = self.table.horizontalHeader()
-            col_widths = [110, 130, 70, 120, 200, 90, 80, 130, 80, 110]
+            col_widths = [110, 130, 50, 70, 120, 200, 90, 80, 130, 80, 110]
             for i, width in enumerate(col_widths):
                 header.setSectionResizeMode(i, QHeaderView.Interactive if i not in [self.COL_THUMBNAIL] else QHeaderView.ResizeToContents)
                 if i != self.COL_THUMBNAIL: self.table.setColumnWidth(i, width)
@@ -218,16 +274,16 @@ class SlideTableManager(QObject):
 
     def _update_effect_button_display(self, button: QPushButton, effects: list[str]):
         if not effects:
-            button.setText("None")
-            button.setToolTip("No effects selected.")
+            button.setText(self.tr("None"))
+            button.setToolTip(self.tr("No effects selected."))
         elif len(effects) == 1:
             effect_name = config.VIDEO_EFFECT_MAP.get(effects[0], "Unknown")
             button.setText(effect_name)
-            button.setToolTip(f"Selected effect: {effect_name}")
+            button.setToolTip(self.tr("Selected effect: {0}").format(effect_name))
         else:
-            button.setText(f"{len(effects)} Effects...")
+            button.setText(self.tr("{0} Effects...").format(len(effects)))
             effect_names = [config.VIDEO_EFFECT_MAP.get(e, "Unknown") for e in effects]
-            button.setToolTip("Selected effects:\n- " + "\n- ".join(effect_names))
+            button.setToolTip(self.tr("Selected effects:\n- {0}").format("\n- ".join(effect_names)))
 
     def _open_effects_dialog(self, row_idx: int):
         slide = self.project_model.slides[row_idx]
@@ -246,14 +302,26 @@ class SlideTableManager(QObject):
                 self.on_table_item_changed(row_idx, "video_effects", None, new_effects)
 
     def _update_slide_table_row_widgets(self, idx, slide):
-        for col in [self.COL_DURATION, self.COL_AUDIO_STREAM, self.COL_PINP_POS, self.COL_PINP_SCALE, self.COL_PINP_EFFECT]:
+        for col in [self.COL_PREVIEW, self.COL_DURATION, self.COL_AUDIO_STREAM, self.COL_PINP_POS, self.COL_PINP_SCALE, self.COL_PINP_EFFECT]:
             self.table.removeCellWidget(idx, col)
             self.table.setItem(idx, col, None)
+
+        # Play button (Column 2) - only for rows with a real audio/video material.
+        if slide.filename and slide.filename != config.SILENT_MATERIAL_NAME:
+            play_button = QPushButton("▶")
+            play_button.setToolTip(self.tr("Play audio/video"))
+            play_button.clicked.connect(partial(self._on_play_material_clicked, idx))
+            self.table.setCellWidget(idx, self.COL_PREVIEW, self._create_centered_widget(play_button))
+        else:
+            item = QTableWidgetItem("—")
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(idx, self.COL_PREVIEW, item)
 
         self.table.removeCellWidget(idx, self.COL_DURATION)
         if slide.filename == config.SILENT_MATERIAL_NAME:
             # Case 1: Silent material, user can set duration.
-            duration_spin = QSpinBox()
+            duration_spin = NoWheelSpinBox()
             duration_spin.setRange(*config.SILENT_DURATION_RANGE)
             duration_spin.setValue(int(slide.duration))
             duration_spin.valueChanged.connect(partial(self.on_table_item_changed, idx, "duration", duration_spin))
@@ -269,18 +337,18 @@ class SlideTableManager(QObject):
             duration_edit.setReadOnly(True)
             if not slide.tech_info and slide.duration == 0:
                 # Sub-case 3a: Not yet validated.
-                duration_edit.setText("Not validated")
+                duration_edit.setText(self.tr("Not validated"))
                 duration_edit.setStyleSheet("color: grey; font-style: italic;")
             else:
                 # Sub-case 3b: Validated.
                 duration_edit.setText(self._format_duration(slide.duration))
-            self.table.setCellWidget(idx, self.COL_DURATION, duration_edit)
+            self.table.setCellWidget(idx, self.COL_DURATION, self._create_centered_widget(duration_edit))
 
         # Audio Stream Selection Widget (Column 3)
         has_multiple_streams = slide.audio_streams and len(slide.audio_streams) > 1
         
         if has_multiple_streams:
-            stream_combo = QComboBox()
+            stream_combo = NoWheelComboBox()
             for i, stream_data in enumerate(slide.audio_streams):
                 lang = stream_data.get('language', 'unk')
                 title = stream_data.get('title', '')
@@ -289,6 +357,9 @@ class SlideTableManager(QObject):
                 desc = f"#{i}: {lang} ({layout})" + (f" - {title}" if title else "")
                 stream_combo.addItem(desc, i)
             
+            # Clamp a stale index to a valid range so the combo selects the correct audio stream.
+            if not (0 <= slide.selected_audio_stream_index < len(slide.audio_streams)):
+                slide.selected_audio_stream_index = 0
             stream_combo.setCurrentIndex(slide.selected_audio_stream_index)
             stream_combo.currentIndexChanged.connect(partial(self.on_table_item_changed, idx, "selected_audio_stream_index", stream_combo))
             
@@ -297,6 +368,8 @@ class SlideTableManager(QObject):
             stream_combo.currentTextChanged.connect(stream_container.setToolTip)
             self.table.setCellWidget(idx, self.COL_AUDIO_STREAM, stream_container)
         else:
+            # Single-stream or no-audio material: force the index to 0 since none is selectable.
+            slide.selected_audio_stream_index = 0
             display_text = "—"
             if slide.audio_streams:
                 display_text = "Single"
@@ -310,7 +383,7 @@ class SlideTableManager(QObject):
         
         # PinP settings (Columns 5, 6, 7)
         if slide.is_video:
-            pos_combo = QComboBox()
+            pos_combo = NoWheelComboBox()
             self._populate_combo_with_tooltips(pos_combo, list(config.VIDEO_POSITION_MAP.keys()))
             pos_combo.setCurrentText(slide.video_position or "Center")
             pos_combo.currentTextChanged.connect(partial(self.on_table_item_changed, idx, "video_position", pos_combo))
@@ -319,7 +392,7 @@ class SlideTableManager(QObject):
             pos_combo.currentTextChanged.connect(pos_container.setToolTip)
             self.table.setCellWidget(idx, self.COL_PINP_POS, pos_container)
 
-            scale_spin = QSpinBox()
+            scale_spin = NoWheelSpinBox()
             scale_spin.setRange(*config.PINP_SCALE_RANGE)
             scale_spin.setSuffix("%")
             scale_spin.setValue(slide.video_scale)
@@ -425,12 +498,12 @@ class SlideTableManager(QObject):
     def calculate_and_display_total_duration(self):
         needs_validation = any(s.duration == 0 for s in self.project_model.slides if s.filename and s.filename != config.SILENT_MATERIAL_NAME)
         if needs_validation:
-            self.total_duration_label.setText("Total Estimated Duration: Needs validation")
+            self.total_duration_label.setText(self.tr("Total Estimated Duration: Needs validation"))
             return
         
         total_duration = sum(s.duration for s in self.project_model.slides) + sum(s.interval_to_next for s in self.project_model.slides[:-1])
         self.project_model.total_duration = total_duration
-        self.total_duration_label.setText(f"Total Estimated Duration: {self._format_duration(total_duration, include_msec=False)}")
+        self.total_duration_label.setText(self.tr("Total Estimated Duration: {0}").format(self._format_duration(total_duration, include_msec=False)))
     
     def apply_transition_to_all(self, transition: str):
         if not self.project_model.slides: return
@@ -447,7 +520,7 @@ class SlideTableManager(QObject):
                         with block_signals(combo_box):
                             combo_box.setCurrentText(transition)
         
-        QMessageBox.information(self.table, "Success", f"Transition '{transition}' has been applied to all applicable slides.")
+        QMessageBox.information(self.table, self.tr("Success"), self.tr("Transition '{0}' has been applied to all applicable slides.").format(transition))
         self.model_changed.emit()
 
     def apply_interval_to_all(self, interval: int):
@@ -466,7 +539,7 @@ class SlideTableManager(QObject):
                             spin_box.setValue(interval)
         
         self.calculate_and_display_total_duration()
-        QMessageBox.information(self.table, "Success", f"Interval of {interval} seconds has been applied to all applicable slides.")
+        QMessageBox.information(self.table, self.tr("Success"), self.tr("Interval of {0} seconds has been applied to all applicable slides.").format(interval))
         self.model_changed.emit()
         
     def _format_duration(self, seconds, include_msec=True):

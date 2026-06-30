@@ -3,16 +3,82 @@ from PySide6.QtWidgets import (QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
                                QTextEdit, QComboBox, QSpinBox, QCheckBox,
                                QSizePolicy, QFormLayout, QLineEdit, QProgressBar,
                                QTabWidget, QWidget, QTableWidget, QSpacerItem,
-                               QPlainTextEdit, QAbstractItemView)
-from PySide6.QtCore import Qt, Signal
+                               QPlainTextEdit, QAbstractItemView, QHeaderView, QFrame)
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QPainter, QPalette
+
+from ssmm import config
 
 class ClickableLabel(QLabel):
     clicked = Signal()
+    doubleClicked = Signal()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setCursor(Qt.PointingHandCursor)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
             self.clicked.emit()
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+def wrap_cell_widget(widget: QWidget, h_margin: int = 6, v_margin: int = 4) -> QWidget:
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(h_margin, v_margin, h_margin, v_margin)
+    layout.setAlignment(Qt.AlignVCenter)
+    widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    layout.addWidget(widget)
+    return container
+
+
+class WordWrapHeaderView(QHeaderView):
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setDefaultAlignment(Qt.AlignCenter | Qt.TextWordWrap)
+
+    def sectionSizeFromContents(self, logicalIndex: int) -> QSize:
+        model = self.model()
+        text = "" if model is None else str(model.headerData(logicalIndex, Qt.Horizontal, Qt.DisplayRole) or "")
+        width = max(self.sectionSize(logicalIndex), self.minimumSectionSize())
+        rect = self.fontMetrics().boundingRect(
+            0, 0, width - 10, 1000, Qt.TextWordWrap | Qt.AlignCenter, text
+        )
+        return QSize(width, rect.height() + 12)
+
+
+class SlideTableWidget(QTableWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setHorizontalHeader(WordWrapHeaderView(self))
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.rowCount() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(self.palette().color(QPalette.PlaceholderText))
+            painter.drawText(
+                self.viewport().rect(),
+                Qt.AlignCenter | Qt.TextWordWrap,
+                self.tr("No project loaded.\nSelect a project folder to begin."),
+            )
+            painter.end()
 
 
 class Ui_MainWindow(object):
@@ -93,7 +159,9 @@ class Ui_MainWindow(object):
 
         MainWindow.normalize_loudness_mode_label = QLabel(MainWindow.tr("Mode:"))
         MainWindow.normalize_loudness_mode_combo = QComboBox()
-        MainWindow.normalize_loudness_mode_combo.addItems([MainWindow.tr("1-Pass (Faster)"), MainWindow.tr("2-Pass (Recommended)")])
+        # Items are stored verbatim as the parameter value (saved to TOML, compared in
+        # video_processing), so keep them English and untranslated.
+        MainWindow.normalize_loudness_mode_combo.addItems(list(config.LOUDNORM_MODES.values()))
         
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(MainWindow.normalize_loudness_mode_combo)
@@ -107,7 +175,7 @@ class Ui_MainWindow(object):
         MainWindow.video_tab = QWidget()
         video_layout = QFormLayout(MainWindow.video_tab)
 
-        # Add FPS settings to the top of this tab
+        # FPS settings
         MainWindow.fps_label = QLabel(MainWindow.tr("FPS:"))
         MainWindow.fps_combo = QComboBox()
         MainWindow.fps_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -119,13 +187,16 @@ class Ui_MainWindow(object):
         
         MainWindow.value_label = QLabel(MainWindow.tr("Quality (0-51):"))
         MainWindow.value_spin = QSpinBox()
+        # Initial range/value matching the CRF label; reconfigured at runtime by the encoding-mode handler.
+        MainWindow.value_spin.setRange(0, 51)
+        MainWindow.value_spin.setValue(23)
         video_layout.addRow(MainWindow.value_label, MainWindow.value_spin)
         
         MainWindow.pass_label = QLabel(MainWindow.tr("Passes:"))
         MainWindow.pass_combo = QComboBox()
         video_layout.addRow(MainWindow.pass_label, MainWindow.pass_combo)
         
-        # Add a separator and the preview checkbox
+        # Separator before the preview checkbox
         video_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Fixed))
         MainWindow.preview_pinp_checkbox = QCheckBox(MainWindow.tr("Preview PinP video on thumbnails"))
         MainWindow.preview_pinp_checkbox.setChecked(True)
@@ -209,33 +280,51 @@ class Ui_MainWindow(object):
 
         # -- Tab 1: Slide Settings --
         MainWindow.slide_settings_tab = QWidget()
-        MainWindow.slide_table = QTableWidget()
+        MainWindow.slide_table = SlideTableWidget()
         MainWindow.slide_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         MainWindow.slide_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Use alternating row bands instead of grid lines to distinguish rows.
+        MainWindow.slide_table.setShowGrid(False)
+        MainWindow.slide_table.setAlternatingRowColors(True)
+        MainWindow.slide_table.setStyleSheet(
+            "QTableWidget::item { padding: 0px; }"
+            "QTableWidget QComboBox, QTableWidget QSpinBox,"
+            " QTableWidget QLineEdit, QTableWidget QPushButton { min-height: 24px; }"
+        )
         
         slide_settings_layout = QVBoxLayout()
         MainWindow.total_duration_label = QLabel(MainWindow.tr("Total Duration: 0 sec"))
-        
+        # Emphasize the running total using the font API so it survives theme toggles.
+        _dur_font = MainWindow.total_duration_label.font()
+        _dur_font.setBold(True)
+        _dur_font.setPointSize(_dur_font.pointSize() + 2)
+        MainWindow.total_duration_label.setFont(_dur_font)
+
         edit_selection_layout = QHBoxLayout()
-        
-        select_label = QLabel(MainWindow.tr("Select:"))
-        edit_selection_layout.addWidget(select_label)
-        
+
         MainWindow.select_all_button = QPushButton(MainWindow.tr("All"))
         MainWindow.select_all_button.setToolTip(MainWindow.tr("Select all slides"))
-        
+
         MainWindow.select_video_button = QPushButton(MainWindow.tr("Movie"))
         MainWindow.select_video_button.setToolTip(MainWindow.tr("Select slides with video material"))
 
         MainWindow.select_audio_button = QPushButton(MainWindow.tr("Audio"))
         MainWindow.select_audio_button.setToolTip(MainWindow.tr("Select slides with audio-only material"))
 
-        edit_selection_layout.addWidget(MainWindow.select_all_button)
-        edit_selection_layout.addWidget(MainWindow.select_video_button)
-        edit_selection_layout.addWidget(MainWindow.select_audio_button)
-        
+        # Framed group holding the "Select:" caption and selection shortcut buttons.
+        select_group = QFrame()
+        select_group.setFrameShape(QFrame.StyledPanel)
+        select_group_layout = QHBoxLayout(select_group)
+        select_group_layout.setContentsMargins(8, 3, 8, 3)
+        select_group_layout.setSpacing(4)
+        select_group_layout.addWidget(QLabel(MainWindow.tr("Select:")))
+        select_group_layout.addWidget(MainWindow.select_all_button)
+        select_group_layout.addWidget(MainWindow.select_video_button)
+        select_group_layout.addWidget(MainWindow.select_audio_button)
+        edit_selection_layout.addWidget(select_group)
+
         edit_selection_layout.addSpacerItem(QSpacerItem(20, 20, QSizePolicy.Fixed, QSizePolicy.Minimum))
-        
+
         MainWindow.edit_selection_button = QPushButton(MainWindow.tr("Edit Selected Slides..."))
         MainWindow.edit_selection_button.setEnabled(False)
         MainWindow.edit_selection_button.setToolTip(MainWindow.tr("Select one or more slides to enable."))
@@ -311,6 +400,12 @@ class Ui_MainWindow(object):
         MainWindow.font_license_text_edit.setReadOnly(True)
         licenses_layout.addWidget(font_license_header)
         licenses_layout.addWidget(MainWindow.font_license_text_edit)
+
+        thirdparty_license_header = QLabel(MainWindow.tr("<b>Third-Party Library Licenses</b>"))
+        MainWindow.thirdparty_license_text_edit = QTextEdit()
+        MainWindow.thirdparty_license_text_edit.setReadOnly(True)
+        licenses_layout.addWidget(thirdparty_license_header)
+        licenses_layout.addWidget(MainWindow.thirdparty_license_text_edit)
 
         licenses_layout.addSpacerItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Fixed))
 

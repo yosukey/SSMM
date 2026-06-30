@@ -4,7 +4,7 @@ import platform
 import subprocess
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
-import config
+from ssmm import config
 
 class FFmpegInstaller(QThread):
     log_message = Signal(str)
@@ -19,18 +19,20 @@ class FFmpegInstaller(QThread):
 
     def _get_tool_executable_path(self, name: str) -> str | None:
         try:
-            subprocess.run([name, '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([name, '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=config.SUBPROCESS_CREATION_FLAGS, timeout=10)
             return name
-        except (OSError, subprocess.CalledProcessError):
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             if platform.system() == 'Windows' and name == 'winget':
                 winget_path = self._get_windows_winget_path()
                 if winget_path:
                     try:
-                        subprocess.run([str(winget_path), '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run([str(winget_path), '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       creationflags=config.SUBPROCESS_CREATION_FLAGS, timeout=10)
                         return str(winget_path)
-                    except (OSError, subprocess.CalledProcessError):
+                    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                         pass
-            
+
             return None
 
     def run(self):

@@ -1,9 +1,9 @@
 # workers.py
 from PySide6.QtCore import QObject, Signal, Slot
 from pathlib import Path
-from models import ProjectModel
-from validator import ProjectValidator
-from settings_manager import SettingsManager
+from ssmm.models import ProjectModel
+from ssmm.validator import ProjectValidator
+from ssmm.settings_manager import SettingsManager
 
 class EncoderTestWorker(QObject):
     finished = Signal(object, object)
@@ -13,8 +13,12 @@ class EncoderTestWorker(QObject):
         self.validator = validator
 
     def run(self):
-        encoders_map, logs = self.validator.get_functional_encoders()
-        self.finished.emit(encoders_map, logs)
+        try:
+            encoders_map, logs = self.validator.get_functional_encoders()
+            self.finished.emit(encoders_map, logs)
+        except Exception as e:
+            # Emit a terminal signal even on failure so the owning QThread can quit.
+            self.finished.emit({}, [f"[ERROR] Hardware encoder test failed: {e}"])
 
 class ProjectSetupWorker(QObject):
     finished = Signal(ProjectModel)
@@ -44,6 +48,11 @@ class ProjectSetupWorker(QObject):
                     self.validator.probe_and_cache_all_materials(project_model)
                     if project_model.slides and not project_model.slides[0].p_hash:
                          self.validator.compute_and_populate_pdf_details(project_model)
+            elif self.path.is_file() and self.path.suffix.lower() == '.dmj':
+                project_model = self.settings_manager.import_dougameijin_project(self.path)
+                if project_model:
+                    self.validator.probe_and_cache_all_materials(project_model)
+                    self.validator.compute_and_populate_pdf_details(project_model)
             elif self.path.is_dir():
                 project_model = ProjectModel(project_folder=self.path)
                 main_window = self.settings_manager.main_window
@@ -62,7 +71,11 @@ class ProjectSetupWorker(QObject):
             self.error.emit(title, message)
         finally:
             self.validator.log = original_logger
-            self.settings_manager.log_message.disconnect(self.log_message)
+            try:
+                self.settings_manager.log_message.disconnect(self.log_message)
+            except (TypeError, RuntimeError):
+                # disconnect() raises if the signal was never connected or already torn down.
+                pass
 
 class ValidationWorker(QObject):
     log_message = Signal(str, str)

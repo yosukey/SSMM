@@ -75,8 +75,8 @@ Please be aware of the following limitations regarding these applications:
    - **macOS**: `brew install ffmpeg`
    - **Linux**: Use your distro’s package manager (e.g., `sudo apt install ffmpeg`) or a static build.
    
-   The app will auto-detect FFmpeg from:
-   [1] `~/ffmpeg-bin` → [2] system `PATH`
+   The app will auto-detect FFmpeg in this order:
+   [1] `~/ffmpeg-bin` → [2] system `PATH` → [3] common Homebrew paths (macOS: `/opt/homebrew/bin`, `/usr/local/bin`) → [4] the FFmpeg bundled with the packaged app (release builds only)
 
 > Tip: If you want a portable setup, place `ffmpeg` and `ffprobe` in `~/ffmpeg-bin/`.
 
@@ -115,6 +115,8 @@ Please be aware of the following limitations regarding these applications:
    - **Step 5**: **Create Video**.
 
 You can also **Save/Load** `settings.toml` to reproduce a project settings later.
+
+You can additionally **import a [DougaMeijin](https://github.com/yosukey/DougaMeijin) project file** (`.dmj`) via **File → Import DougaMeijin Project...**. You choose the folder to extract into, the archive is unpacked into a new subfolder there, its page images are combined into a PDF, and the per-page narration is brought in as audio materials so you can continue editing in SSMM. (This is a one-way import; SSMM does not write the `.dmj` format.)
 
 ---
 
@@ -222,7 +224,33 @@ While these file extensions are supported, they can contain audio and video enco
 
 - FFmpeg and the broader open-source multimedia community
 - PySide6 / Qt for Python
-- PyMuPDF (fitz), Pillow (PIL), ImageHash, PyQtDarkTheme
+- pypdfium2 (PDFium), Pillow (PIL), ImageHash, PyQtDarkTheme
+
+### Third-Party Components & Licenses
+
+SSMM is distributed as a self-contained application that bundles or links the
+components below. All of them are permissive licenses, or copyleft licenses
+(LGPL) whose obligations are satisfied by dynamic linking together with the
+notices and source references provided in the application's "Licenses" tab.
+This keeps the distributed application consistent with SSMM's own MIT license.
+
+| Component | Role | License |
+| --- | --- | --- |
+| PySide6 / Qt for Python | GUI toolkit | LGPL-3.0 |
+| pypdfium2 (bundles Google PDFium) | PDF rendering & reading | Apache-2.0 / BSD-3-Clause (PDFium: BSD-3-Clause) |
+| Pillow | Image processing & image→PDF | HPND (MIT-style) |
+| PyQtDarkTheme | Qt theme | MIT |
+| psutil | System info | BSD-3-Clause |
+| ImageHash | Perceptual hashing | BSD-2-Clause |
+| NumPy | Numerical computing | BSD-3-Clause |
+| toml | TOML parsing | MIT |
+| packaging | Version handling | Apache-2.0 / BSD-2-Clause |
+| FFmpeg (bundled in release builds) | Audio/video encoding | LGPL-2.1 |
+| Noto Sans fonts (bundled) | Text rendering | SIL Open Font License 1.1 |
+
+> Note: SSMM previously used PyMuPDF (AGPL-3.0) for PDF handling. It has been
+> replaced by pypdfium2 so that the entire distributed application remains
+> under permissive terms compatible with the MIT license.
 
 #### Funding
 
@@ -232,9 +260,15 @@ This work represents an outcome of the research project supported by JSPS KAKENH
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License. The full text is in the
+[`LICENSE`](LICENSE) file.
 
 **Copyright** (c) 2025-- Yosuke Yamazaki
+
+The MIT license covers SSMM's own source code. Bundled and linked third-party
+components keep their own licenses; see
+[Third-Party Components & Licenses](#third-party-components--licenses) above and
+the "Licenses" tab within the application for the full notices and texts.
 
 ### Disclaimer
 
@@ -262,7 +296,6 @@ This application bundles Noto Sans by Google and Adobe. It is available under th
 ## 🚗 Roadmap
 
 1. Code sign the distributed binaries.
-1. i18n
 1. Prepare user manual.
 
 ---

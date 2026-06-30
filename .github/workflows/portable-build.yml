@@ -1,0 +1,110 @@
+name: build-portable
+
+# Manually-triggered workflow that builds the Windows portable (one-file) EXE.
+# The automatic build-release workflow no longer produces this artifact, so use
+# this workflow to generate it on demand and (optionally) attach it to an
+# existing GitHub Release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to version the portable EXE with (e.g. v1.0.0). Leave empty to produce an unversioned "dev" build.'
+        required: false
+        type: string
+      attach_to_release:
+        description: 'Attach the built portable EXE to the GitHub Release identified by the tag above.'
+        required: false
+        type: boolean
+        default: false
+
+# Required so softprops/action-gh-release can attach the asset to the release.
+# Without it the default GITHUB_TOKEN is read-only and the upload fails with
+# "Resource not accessible by integration".
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    # Read the tag as $env:RELEASE_TAG (instead of interpolating ${{ ... }} into
+    # the script body) to prevent shell injection from a crafted input value.
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          pip install -r requirements.txt
+
+      - name: Generate third-party license notices
+        run: |
+          python -m pip install pip-licenses
+          python -c "import os; os.makedirs('resources/licenses', exist_ok=True)"
+          pip-licenses --with-license-file --no-license-path --format=plain-vertical --ignore-packages pip-licenses prettytable wcwidth tomli setuptools wheel pip --output-file resources/licenses/THIRD_PARTY_LICENSES.txt
+
+      - name: Install build tools
+        run: pip install pyinstaller
+
+      - name: Compile translations
+        run: pyside6-lrelease translations/ssmm_ja.ts -qm translations/ssmm_ja.qm
+
+      - name: Update Version in config.py
+        if: inputs.tag != ''
+        shell: pwsh
+        run: |
+          $ver = "$env:RELEASE_TAG".TrimStart("v")
+          # Replace the entire function call with a static version string for the build
+          (Get-Content ssmm/config.py) -replace "APP_VERSION = get_version\(\)", "APP_VERSION = '$ver'" | Set-Content ssmm/config.py
+          echo "Updated ssmm/config.py to version $ver for build"
+
+      - name: Build for Windows Portable (one-file)
+        run: >
+          pyinstaller --noconsole --onefile --name "SSMM"
+          --icon resources\assets\app_icon.ico
+          --splash resources\assets\splash_screen.png
+          --add-data "resources/assets;resources/assets"
+          --add-data "resources/agif;resources/agif"
+          --add-data "resources/fonts;resources/fonts"
+          --add-data "resources/ffmpeg;resources/ffmpeg"
+          --add-data "resources/licenses;resources/licenses"
+          --add-data "translations;translations"
+          --collect-all PySide6.QtMultimedia
+          --collect-all pypdfium2
+          main.py
+
+      - name: Package portable artifact
+        id: package
+        shell: pwsh
+        run: |
+          $ver = "$env:RELEASE_TAG".TrimStart("v")
+          if ([string]::IsNullOrEmpty($ver)) { $ver = "dev" }
+
+          # Get architecture from runner context
+          $arch = "${{ runner.arch }}".ToLower()
+
+          $portableName = "SSMM-${ver}-windows-${arch}-portable.exe"
+          Copy-Item "dist/SSMM.exe" $portableName
+          echo "portable_name=$portableName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload portable EXE as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.portable_name }}
+          path: ${{ steps.package.outputs.portable_name }}
+
+      - name: Attach portable EXE to Release
+        if: inputs.attach_to_release && inputs.tag != ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: SSMM-*-windows-*-portable.exe
