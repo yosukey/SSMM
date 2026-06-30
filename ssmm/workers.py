@@ -3,7 +3,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from pathlib import Path
 from ssmm.models import ProjectModel
 from ssmm.validator import ProjectValidator
-from ssmm.settings_manager import SettingsManager
+from ssmm.settings_manager import SettingsManager, SettingsFileParseError
 
 class EncoderTestWorker(QObject):
     finished = Signal(object, object)
@@ -42,24 +42,44 @@ class ProjectSetupWorker(QObject):
             self.validator.log = worker_logger
             project_model = None
 
+            def setup_from_toml(toml_file: Path, folder_override: Path | None) -> ProjectModel | None:
+                model = self.settings_manager._load_from_file(
+                    toml_file, project_folder_override=folder_override)
+                if model:
+                    self.validator.probe_and_cache_all_materials(model)
+                    if model.slides and not model.slides[0].p_hash:
+                         self.validator.compute_and_populate_pdf_details(model)
+                return model
+
+            def setup_from_folder(folder: Path) -> ProjectModel:
+                model = ProjectModel(project_folder=folder)
+                main_window = self.settings_manager.main_window
+                main_window.initialize_project_from_pdf(model)
+                main_window._automap_materials(model)
+                self.validator.probe_and_cache_all_materials(model)
+                self.validator.compute_and_populate_pdf_details(model)
+                return model
+
             if self.path.is_file() and self.path.suffix == '.toml':
-                project_model = self.settings_manager._load_from_file(self.path)
-                if project_model:
-                    self.validator.probe_and_cache_all_materials(project_model)
-                    if project_model.slides and not project_model.slides[0].p_hash:
-                         self.validator.compute_and_populate_pdf_details(project_model)
+                project_model = setup_from_toml(self.path, None)
             elif self.path.is_file() and self.path.suffix.lower() == '.dmj':
                 project_model = self.settings_manager.import_dougameijin_project(self.path)
                 if project_model:
                     self.validator.probe_and_cache_all_materials(project_model)
                     self.validator.compute_and_populate_pdf_details(project_model)
             elif self.path.is_dir():
-                project_model = ProjectModel(project_folder=self.path)
-                main_window = self.settings_manager.main_window
-                main_window.initialize_project_from_pdf(project_model)
-                main_window._automap_materials(project_model)
-                self.validator.probe_and_cache_all_materials(project_model)
-                self.validator.compute_and_populate_pdf_details(project_model)
+                candidate = self.path / 'settings.toml'
+                if candidate.is_file():
+                    try:
+                        project_model = setup_from_toml(candidate, self.path)
+                    except SettingsFileParseError as e:
+                        self.log_message.emit(
+                            f"[WARNING] settings.toml in the project folder could not be parsed "
+                            f"({e}); loading the folder as a new project instead.", 'app')
+                        self.validator.validated_pdf_hash = None
+                        project_model = setup_from_folder(self.path)
+                else:
+                    project_model = setup_from_folder(self.path)
             else:
                 raise ValueError("Invalid path provided to ProjectSetupWorker.")
 

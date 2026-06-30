@@ -11,6 +11,9 @@ from ssmm import config
 from ssmm import dougameijin_importer
 from ssmm import pdf_utils
 
+class SettingsFileParseError(ValueError):
+    pass
+
 class SettingsManager(QObject):
     log_message = Signal(str, str)
 
@@ -83,13 +86,13 @@ class SettingsManager(QObject):
             self._coerce_and_validate_parameters(project_model.parameters)
         return project_model
 
-    def _load_from_file(self, file_path: Path) -> ProjectModel | None:
+    def _load_from_file(self, file_path: Path, project_folder_override: Path | None = None) -> ProjectModel | None:
         self.log_message.emit(f"[INFO] Attempting to load project settings from: {file_path}", 'app')
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = toml.load(f)
         except (toml.TomlDecodeError, UnicodeDecodeError) as e:
-            raise ValueError(f"The settings file '{file_path.name}' is not a valid TOML file or is corrupt: {e}")
+            raise SettingsFileParseError(f"The settings file '{file_path.name}' is not a valid TOML file or is corrupt: {e}")
 
         validation_info = data.get("validation_info", {})
         cached_pdf_hash = validation_info.get("pdf_file_hash")
@@ -109,11 +112,15 @@ class SettingsManager(QObject):
                 self.log_message.emit(f"[WARNING] Could not verify settings file integrity: {e}", 'app')
 
         paths = data.get("paths", {})
-        project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") else paths.get("project_folder")
-        if not project_path_str or not Path(project_path_str).is_dir():
-             raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
-
-        project_dir = Path(project_path_str)
+        if project_folder_override is not None:
+            project_dir = Path(project_folder_override)
+            if not project_dir.is_dir():
+                raise FileNotFoundError(f"Project folder '{project_dir}' could not be found.")
+        else:
+            project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") else paths.get("project_folder")
+            if not project_path_str or not Path(project_path_str).is_dir():
+                 raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
+            project_dir = Path(project_path_str)
         pdf_files = list(project_dir.glob('*.[pP][dD][fF]'))
         if not pdf_files:
             raise FileNotFoundError(f"No PDF file found in the project folder '{project_dir}'.")
