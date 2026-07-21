@@ -12,7 +12,7 @@ import shlex
 import platform
 import os
 import math
-import signal
+import time
 
 from PySide6.QtCore import QObject, Signal, Slot, QProcess
 
@@ -88,8 +88,6 @@ class VideoProcessor(QObject):
         super().__init__()
         self._is_canceled = False
         self._is_canceled_lock = threading.Lock()
-        self.active_pids = set()
-        self.process_lock = threading.Lock()
         self.watermark_path: Path | None = None
         self._current_step = 0
         self._total_steps = 1
@@ -112,34 +110,32 @@ class VideoProcessor(QObject):
         return total_frames / fps
 
     def cancel(self):
+        # cancel() runs on the GUI thread, but QProcess is thread-affine and must not
+        # be touched from here. Only flip the flag; the worker thread's own polling in
+        # _run_subprocess notices it and kills its QProcess safely. This removes both
+        # the check/start race window and the pid-reuse hazard of an os.kill-by-pid.
         self._set_canceled(True)
 
-        # cancel() runs on the GUI thread while the QProcess objects live on the worker
-        # thread, and QProcess is not thread-safe. Signal the OS processes by pid (captured
-        # on the worker thread after start) so we never touch a QProcess across threads.
-        with self.process_lock:
-            pids_to_kill = list(self.active_pids)
-
-        kill_signal = signal.SIGKILL if hasattr(signal, 'SIGKILL') else signal.SIGTERM
-        for pid in pids_to_kill:
-            try:
-                os.kill(pid, kill_signal)
-            except (ProcessLookupError, OSError) as e:
-                # Already exited, or the pid is no longer valid; nothing to kill.
-                self.log_message.emit(f"[DEBUG] Could not signal process {pid} during cancel: {e}", 'app')
-            
     @Slot(ProjectModel, bool)
     def start_video_creation(self, project_model: ProjectModel, is_verbose: bool):
         self._set_canceled(False)
         self._is_verbose = is_verbose
-        success, message = self.run_video_creation(project_model)
+        # Always emit a terminal signal, even if run_video_creation raises before its
+        # own try/except; otherwise the UI would stay stuck in "processing" forever.
+        try:
+            success, message = self.run_video_creation(project_model)
+        except Exception as e:
+            success, message = False, str(e)
         self.video_finished.emit(success, message)
 
     @Slot(ProjectModel, int, Path, bool, bool)
     def start_preview_creation(self, project_model: ProjectModel, slide_index: int, pdf_path: Path, is_verbose: bool, include_intervals: bool):
         self._set_canceled(False)
         self._is_verbose = is_verbose
-        success, message = self.run_preview_creation(project_model, slide_index, pdf_path, include_intervals)
+        try:
+            success, message = self.run_preview_creation(project_model, slide_index, pdf_path, include_intervals)
+        except Exception as e:
+            success, message = False, str(e)
         self.preview_finished.emit(success, message)
         
     def _run_subprocess(self, command_list: list[str], capture_output=False, timeout_sec=None):
@@ -162,22 +158,40 @@ class VideoProcessor(QObject):
         
         process.readyRead.connect(handle_output)
 
-        started_pid = None
         try:
             process.start(command_list[0], command_list[1:])
 
             if not process.waitForStarted(config.PROCESS_START_TIMEOUT_MS):
                 raise RuntimeError("Process failed to start.")
 
-            # Record the OS pid so cancel() can terminate this process from the GUI thread
-            # without calling any (thread-affine) QProcess method.
-            started_pid = process.processId()
-            if started_pid:
-                with self.process_lock:
-                    self.active_pids.add(started_pid)
-
             timeout_ms = (timeout_sec * 1000) if timeout_sec is not None else config.FFMPEG_ENCODE_TIMEOUT_MS
-            finished_normally = process.waitForFinished(timeout_ms)
+            # Poll instead of a single blocking wait so a cancel raised on the GUI
+            # thread is acted on within one poll interval by killing this QProcess
+            # here on the worker thread (the only thread allowed to touch it). This
+            # also closes the old check/start cancel race: a process started just
+            # after the entry check is killed on the very next poll.
+            poll_ms = 200
+            deadline = time.monotonic() + timeout_ms / 1000.0
+            finished_normally = False
+            while True:
+                if process.waitForFinished(poll_ms):
+                    finished_normally = True
+                    break
+                # waitForFinished() returns False both on a poll timeout AND for a
+                # process that had already finished before the call, so a bare False
+                # is not proof it is still running. Confirm via state() to avoid
+                # spinning until the (10-hour) deadline once the process has exited.
+                if process.state() == QProcess.NotRunning:
+                    finished_normally = True
+                    break
+                handle_output()
+                if self._get_is_canceled():
+                    if process.state() != QProcess.NotRunning:
+                        process.kill()
+                        process.waitForFinished(5000)
+                    raise ProcessingCanceled()
+                if time.monotonic() >= deadline:
+                    break
 
             handle_output()
             combined_output = "".join(output_chunks)
@@ -206,9 +220,10 @@ class VideoProcessor(QObject):
             return combined_output
 
         finally:
-            if started_pid:
-                with self.process_lock:
-                    self.active_pids.discard(started_pid)
+            # Ensure the child never outlives this call (e.g. on an unexpected raise).
+            if process.state() != QProcess.NotRunning:
+                process.kill()
+                process.waitForFinished(5000)
 
     def _create_ffmpeg_builder(self) -> FFmpegCommandBuilder:
         builder = FFmpegCommandBuilder()
@@ -220,9 +235,14 @@ class VideoProcessor(QObject):
         with SleepInhibitor(self.log_message.emit):
             self.watermark_path = None
             
-            final_video_path = project_model.output_folder / f"{project_model.parameters.filename_input}.mp4"
-            temp_video_path = final_video_path.with_name(final_video_path.stem + ".tmp" + final_video_path.suffix)
+            # Resolve the output directory first; output_folder may be None, and the
+            # path below must use the fallback rather than dereferencing None.
             output_dir = project_model.output_folder or Path(".")
+            final_video_path = output_dir / f"{project_model.parameters.filename_input}.mp4"
+            # Unique temp name so a second render (or a stale leftover) targeting the
+            # same output does not clobber this in-progress file.
+            temp_video_path = final_video_path.with_name(
+                f"{final_video_path.stem}.tmp-{uuid.uuid4().hex[:8]}{final_video_path.suffix}")
             delete_temp = project_model.parameters.delete_temp_checkbox
             
             try:
@@ -277,12 +297,12 @@ class VideoProcessor(QObject):
             if not base_filename:
                 base_filename = project_model.project_folder.name
             
+            output_dir = project_model.output_folder or Path(".")
             random_id = uuid.uuid4().hex[:8]
             preview_filename = f"{base_filename}-preview-slide{slide_index+1}-{random_id}.mp4"
-            final_preview_path = project_model.output_folder / preview_filename
-            
+            final_preview_path = output_dir / preview_filename
+
             delete_temp = project_model.parameters.delete_temp_checkbox
-            output_dir = project_model.output_folder or Path(".")
 
             def _run_in_temp_dir(temp_folder: Path):
                 if not delete_temp:
@@ -409,9 +429,13 @@ class VideoProcessor(QObject):
                 return (True, str(final_preview_path))
 
             except ProcessingCanceled:
+                # The preview is concatenated straight into the output folder, so a
+                # cancel/failure can leave a truncated file behind; remove it.
+                self._cleanup_files(final_preview_path)
                 self.log_message.emit("[INFO] Preview creation was canceled by user.", 'app')
                 return (False, "Canceled by user.")
             except Exception as e:
+                self._cleanup_files(final_preview_path)
                 self.log_message.emit(f"[ERROR] An exception occurred during preview creation: {e}", 'app')
                 return (False, str(e))
             finally:
@@ -579,7 +603,7 @@ class VideoProcessor(QObject):
         if not project_model.project_folder or not project_model.project_folder.is_dir():
             raise ValueError("Project folder is not set or is not a valid directory.")
 
-        pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None)
+        pdf_path = next(iter(sorted(project_model.project_folder.glob('*.[pP][dD][fF]'))), None)
         if not pdf_path:
             raise FileNotFoundError("Could not find a PDF file in the project folder.")
 
@@ -721,7 +745,11 @@ class VideoProcessor(QObject):
 
     def _run_logic(self, project_model: ProjectModel, temp_folder: Path, output_video_path: Path):
         total_slides = len(project_model.slides)
-        self._total_steps = total_slides + max(0, total_slides - 1) + 1  # Slides + Transitions + Final Step
+        # A transition segment is only produced (and only advances the step counter)
+        # for a slide whose interval_to_next > 0. Counting every pair would leave the
+        # progress bar short of 100% whenever some intervals are 0.
+        num_transitions = sum(1 for s in project_model.slides[:-1] if s.interval_to_next > 0)
+        self._total_steps = total_slides + num_transitions + 1  # Slides + Transitions + Final Step
         self._current_step = 0
 
         # Step 1: Setup
@@ -868,7 +896,8 @@ class VideoProcessor(QObject):
         dar_str = slide.tech_info.get('dar')
         
         rotation = slide.tech_info.get('rotate')
-        if rotation in ["90", "270", "-90"]:
+        is_rotated_90 = rotation in ["90", "270", "-90"]
+        if is_rotated_90:
             video_width, video_height = video_height, video_width
 
         aspect_ratio = 16/9
@@ -877,7 +906,13 @@ class VideoProcessor(QObject):
             if dar_str and ':' in dar_str and dar_str != '0:1':
                 try:
                     num, den = map(int, dar_str.split(':'))
-                    if den > 0: aspect_ratio = num / den
+                    if num > 0 and den > 0:
+                        aspect_ratio = num / den
+                        if is_rotated_90:
+                            # DAR describes the un-rotated (coded) frame; invert it so
+                            # it matches the rotated display orientation, otherwise the
+                            # transposed (portrait) stream is squashed into a landscape box.
+                            aspect_ratio = 1.0 / aspect_ratio
                 except (ValueError, TypeError): pass
         
         target_pinp_height_float = height * scale_percent
@@ -1109,6 +1144,10 @@ class VideoProcessor(QObject):
             
             return float(output.strip())
 
+        except ProcessingCanceled:
+            # A cancellation raised by _run_subprocess must propagate so the whole
+            # pipeline unwinds immediately instead of continuing with a bogus 0.0.
+            raise
         except Exception as e:
             self.log_message.emit(f"[ERROR] Could not get media duration for '{media_path.name}': {e}", 'app')
             return 0.0
@@ -1188,8 +1227,22 @@ class VideoProcessor(QObject):
                 low, high = config.ENCODING_MPEG4_QSCALE_RANGE
                 qscale = max(low, min(high, value))
                 options.extend(['-qscale:v', str(qscale)])
+            elif 'videotoolbox' in codec:
+                # Defensive only: the UI forces VideoToolbox into a bitrate mode and the
+                # validator rejects VideoToolbox + Quality, so this is not reached in
+                # normal use. VideoToolbox has no CRF, so map the CRF (0-51, lower is
+                # better) to -q:v (1-100, higher is better) rather than emitting a -crf
+                # that this encoder would reject.
+                low, high = config.ENCODING_CRF_RANGE
+                clamped = max(low, min(high, value))
+                q = round((high - clamped) / (high - low) * 100)
+                options.extend(['-q:v', str(q)])
             else:
                 options.extend(['-crf', str(value)])
+                if codec == 'libaom-av1':
+                    # libaom treats -crf as an upper bitrate bound unless the target
+                    # bitrate is 0; -b:v 0 selects true constant-quality mode.
+                    options.extend(['-b:v', '0'])
         else:
             options.extend(['-b:v', f'{value}k'])
             if mode == config.ENCODING_MODES["VBR"]:

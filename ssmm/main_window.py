@@ -20,7 +20,6 @@ import PySide6
 import toml
 import imagehash
 
-import qdarktheme
 from PySide6.QtCore import (QItemSelection, QItemSelectionModel, QObject, Qt,
                             QTimer, QUrl, Signal, QStandardPaths)
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QMovie,
@@ -87,9 +86,9 @@ class HoverGifWidget(QWidget):
         layout.setSpacing(5)
 
         self.gif_label = QLabel()
+        self.gif_label.setObjectName("gifPreview")
         self.gif_label.setAlignment(Qt.AlignCenter)
         self.gif_label.setFixedSize(200, 150)
-        self.gif_label.setStyleSheet("border: 1px solid #555; border-radius: 4px; background-color: #3c3c3c;")
 
         temp_movie = QMovie(str(self.gif_path))
         if temp_movie.isValid():
@@ -149,6 +148,9 @@ class MainWindow(QWidget):
 
         self.available_encoders_map = {}
         self.has_validated_once = False
+        # Tracks unsaved edits to parameters or slide settings so the app can
+        # confirm before discarding them (on exit or when loading another project).
+        self._dirty = False
         self.validation_snapshot = {}
         self.page_count = 0
         self._is_syncing = False
@@ -157,6 +159,12 @@ class MainWindow(QWidget):
         self.parameter_update_timer = QTimer(self)
         self.parameter_update_timer.setSingleShot(True)
         self.parameter_update_timer.timeout.connect(self.on_parameter_changed)
+
+        # Debounces watermark spinbox valueChanged so rapid arrow/typing changes
+        # coalesce into a single cosmetic refresh.
+        self.cosmetic_update_timer = QTimer(self)
+        self.cosmetic_update_timer.setSingleShot(True)
+        self.cosmetic_update_timer.timeout.connect(self.on_cosmetic_parameter_changed)
         
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -219,12 +227,22 @@ class MainWindow(QWidget):
 
     def showEvent(self, event: QShowEvent):
         super().showEvent(event)
+        # The initial encoder check normally starts on first window activation, but a
+        # window shown minimized or without focus may never receive that event and
+        # would sit in CHECKING_ENCODERS with everything disabled. Schedule an
+        # idempotent fallback so startup still proceeds.
+        if self._is_first_activation:
+            QTimer.singleShot(1500, self._ensure_initial_checks)
 
     def handle_focus_changed(self, focus_window):
-         if self._is_first_activation and focus_window is self.windowHandle():
-            self._is_first_activation = False
-            
-            self.perform_initial_checks()
+        if self._is_first_activation and focus_window is self.windowHandle():
+            self._ensure_initial_checks()
+
+    def _ensure_initial_checks(self):
+        if not self._is_first_activation:
+            return
+        self._is_first_activation = False
+        self.perform_initial_checks()
 
     def perform_initial_checks(self):
         if self.ffmpeg_installed:
@@ -263,14 +281,32 @@ class MainWindow(QWidget):
         self.available_encoders_map = encoders_map
         self.project_model.parameters.available_encoders = self.available_encoders_map
 
-        self._populate_comboboxes()
+        # Surface the available-encoder matrix in the Validation Result tab right
+        # away, so the user can review encoder availability before running any
+        # validation. A real validation report (if one already exists) is kept.
+        self._show_encoder_status_preview()
+
+        # Repopulating the combo boxes emits currentIndexChanged on widgets whose
+        # slots mark the project dirty. Guard with _is_syncing so this programmatic
+        # refill is not mistaken for a user edit; otherwise the very first
+        # project-folder selection would raise a spurious "unsaved changes" prompt.
+        self._is_syncing = True
+        try:
+            self._populate_comboboxes()
+        finally:
+            self._is_syncing = False
         self._sync_model_to_ui()
+
+        # Startup population is not a user edit: the app has just reached its
+        # initial state, so it must be considered clean regardless of any signals
+        # the steps above may have emitted.
+        self._clear_dirty()
 
         if self._project_path_on_startup and self._project_path_on_startup.exists():
             self._next_startup_action = self._start_project_setup_from_startup_path
         else:
             self.state_machine.transition_to(AppState.AWAITING_PROJECT)
-        
+
         self.on_worker_thread_finished()
 
     def _start_project_setup_from_startup_path(self):
@@ -481,20 +517,24 @@ class MainWindow(QWidget):
 
     def _change_theme(self, code):
         # Unlike language, theme changes apply immediately: qdarktheme only swaps
-        # the application stylesheet, so no UI re-translation is needed.
-        QApplication.instance().setStyleSheet(
-            qdarktheme.load_stylesheet(app_settings.theme_to_stylesheet_arg(code)))
+        # the application stylesheet, so no UI re-translation is needed. apply()
+        # layers our accent + bespoke QSS on top and returns the concrete theme.
+        from ssmm import theme as app_theme
+        self.current_theme = app_theme.apply(QApplication.instance(), code)
         app_settings.set_theme(code)
 
-        if code in ("light", "dark"):
-            self.current_theme = code
-        else:
-            # "system": resolve the concrete appearance from the palette.
-            text_color = self.palette().color(QPalette.ColorRole.WindowText)
-            self.current_theme = "dark" if text_color.lightness() > 128 else "light"
+        # The slide table's selection colors are hardcoded per theme and were only
+        # applied once at construction; rebuild them so a runtime theme switch does
+        # not leave stale (wrong-theme) highlight colors on the table.
+        from ssmm.ui_main import slide_table_stylesheet
+        self.slide_table.setStyleSheet(slide_table_stylesheet())
 
         if self.last_validation_messages:
             self.validation_results_text.setHtml(self.last_validation_messages.assemble_html(theme=self.current_theme))
+        else:
+            # No validation report is shown; re-render the encoder-matrix preview
+            # (if any) so its colors follow the newly selected theme.
+            self._show_encoder_status_preview()
 
     def _rebuild_recent_menu(self):
         self.recent_menu.clear()
@@ -507,7 +547,9 @@ class MainWindow(QWidget):
         max_width = int(self.screen().availableGeometry().width() * 0.5) if self.screen() else 600
         for path_str in recent:
             label = fm.elidedText(path_str, Qt.ElideMiddle, max_width)
-            action = QAction(label.replace("&", "&&"), self)
+            # Parent the action to the menu so recent_menu.clear() deletes it; parenting
+            # to the window would leak a QAction on every rebuild.
+            action = QAction(label.replace("&", "&&"), self.recent_menu)
             action.setToolTip(path_str)
             action.triggered.connect(lambda checked, p=path_str: self._open_recent_project(p))
             self.recent_menu.addAction(action)
@@ -729,8 +771,12 @@ class MainWindow(QWidget):
             self.watermark_color_combo, self.watermark_fontfamily_combo, self.watermark_rotation_combo,
         ]
         cosmetic_widgets_on_finish_editing = [
-            self.watermark_text_input, self.watermark_opacity_spin, self.watermark_fontsize_spin,
+            self.watermark_text_input,
         ]
+        # Spinboxes use valueChanged (debounced) rather than editingFinished so the
+        # thumbnail refresh also fires when the value is changed via the arrow buttons
+        # while the widget keeps focus (editingFinished would not fire then).
+        cosmetic_spinboxes = [self.watermark_opacity_spin, self.watermark_fontsize_spin]
         cosmetic_widgets_on_toggle = [
             self.add_watermark_checkbox, self.watermark_tile_checkbox,
             self.delete_temp_checkbox, self.append_duration_checkbox,
@@ -741,6 +787,8 @@ class MainWindow(QWidget):
             widget.currentIndexChanged.connect(self.on_cosmetic_parameter_changed)
         for widget in cosmetic_widgets_on_finish_editing:
             widget.editingFinished.connect(self.on_cosmetic_parameter_changed)
+        for widget in cosmetic_spinboxes:
+            widget.valueChanged.connect(self._request_delayed_cosmetic_update)
         for widget in cosmetic_widgets_on_toggle:
             widget.toggled.connect(self.on_cosmetic_parameter_changed)
         
@@ -889,9 +937,9 @@ class MainWindow(QWidget):
         
         file_path_str, _ = QFileDialog.getSaveFileName(
             self, 
-            self.tr("Save Debug Log"), 
+            self.tr("Save Debug Log"),
             str(default_filename),
-            "Text Files (*.txt);;All Files (*)"
+            self.tr("Text Files (*.txt);;All Files (*)")
         )
 
         if file_path_str:
@@ -905,7 +953,7 @@ class MainWindow(QWidget):
                 QMessageBox.critical(self, self.tr("Export Failed"), self.tr("An error occurred while writing the file:\n{0}").format(e))
 
     def on_codec_changed(self, new_codec: str):
-        if self._is_syncing or not new_codec or new_codec == "Checking...":
+        if self._is_syncing or not new_codec or new_codec == "No Encoders Found":
             return
 
         self.project_model.parameters.codec = new_codec
@@ -918,16 +966,25 @@ class MainWindow(QWidget):
         new_hw_data = current_hw_data
         if current_hw_data not in available_hw_data:
             new_hw_data = None if None in available_hw_data else (available_hw_data[0] if available_hw_data else None)
-        
+
         self.project_model.parameters.hardware_encoding = new_hw_data
-        
+
         self.hardware_encoding_combo.blockSignals(True)
         index_to_set = self.hardware_encoding_combo.findData(new_hw_data)
         if index_to_set != -1:
             self.hardware_encoding_combo.setCurrentIndex(index_to_set)
         self.hardware_encoding_combo.blockSignals(False)
 
+        # update_encoding_options() resets the value spin to a mode default. Changing
+        # only the codec should not discard the user's quality/bitrate, so preserve it
+        # across the refresh (clamped to the new codec's range). If the refresh forces
+        # a different mode (e.g. VideoToolbox → VBR), keep that mode's default instead.
+        preserved_value = self.value_spin.value()
+        preserved_mode = self.encoding_mode_combo.currentText()
         self.on_encoding_mode_changed()
+        if self.encoding_mode_combo.currentText() == preserved_mode:
+            clamped = max(self.value_spin.minimum(), min(self.value_spin.maximum(), preserved_value))
+            self.value_spin.setValue(clamped)
 
     def on_encoding_mode_changed(self):
         if self._is_syncing:
@@ -940,6 +997,11 @@ class MainWindow(QWidget):
             return
         self.parameter_update_timer.start(config.DURATION_RECALC_DELAY_MS)
 
+    def _request_delayed_cosmetic_update(self):
+        if self._is_syncing:
+            return
+        self.cosmetic_update_timer.start(config.PINP_PREVIEW_UPDATE_DELAY_MS)
+
     def on_parameter_changed(self):
         if self._is_syncing:
             return
@@ -950,6 +1012,7 @@ class MainWindow(QWidget):
         if self._is_syncing:
             return
         self._sync_ui_to_model()
+        self._mark_dirty()
         # Reflect watermark changes in the slide-list thumbnails immediately.
         self.slide_table_manager.refresh_all_thumbnails()
 
@@ -1015,11 +1078,15 @@ class MainWindow(QWidget):
             self.run_ffmpeg_installation()
 
     def run_ffmpeg_installation(self):
+        # Release the previous dialog instead of leaking it (it was parented to the
+        # window, so closing alone never freed it).
+        if self.progress_dialog is not None:
+            self.progress_dialog.deleteLater()
         self.progress_dialog = InstallProgressDialog(self)
         self.progress_dialog.show()
         self.installer_thread = FFmpegInstaller()
         self.installer_thread.log_message.connect(self.update_install_progress)
-        self.installer_thread.finished.connect(self.on_ffmpeg_install_finished)
+        self.installer_thread.install_finished.connect(self.on_ffmpeg_install_finished)
         self.installer_thread.start()
         
     def update_install_progress(self, message):
@@ -1052,8 +1119,22 @@ class MainWindow(QWidget):
                 self.installer_thread = None
         
     def _start_project_load(self, path: Path):
-        # Single entry point for all project loads (folder, .toml, .dmj). The
-        # path is remembered so it can be added to the recent list on success.
+        # Single entry point for all project loads (folder, .toml, .dmj). Confirm
+        # first so unsaved edits to the current project aren't silently discarded.
+        if not self._confirm_discard_changes():
+            return
+        # A transient task (e.g. the background encoder test) would swallow the setup
+        # request and strand the state machine in LOADING_PROJECT. Bail out before
+        # touching any state so the user can simply retry once it finishes.
+        if self.worker_manager.is_transient_busy():
+            self.on_transient_worker_busy(
+                self.tr("A background task is still running. Please wait a moment and try again."))
+            return
+        # A queued parameter/cosmetic-update timer could fire after the load completes
+        # and mark the freshly loaded (clean) project dirty; cancel them now.
+        self.parameter_update_timer.stop()
+        self.cosmetic_update_timer.stop()
+        # The path is remembered so it can be added to the recent list on success.
         self._pending_recent_path = path
         self.validator.clear_cache()
         self.state_machine.transition_to(AppState.LOADING_PROJECT)
@@ -1091,8 +1172,12 @@ class MainWindow(QWidget):
         self.ui_manager.update_folder_label(self.output_folder_label, self.project_model.output_folder)
         
         self.has_validated_once = False
-        self.validation_results_text.setHtml("")
-        
+        # A freshly loaded project has not been validated yet; drop any previous
+        # report and fall back to the encoder-matrix preview so the tab still shows
+        # useful encoder information before 'Check Files' is run.
+        self.last_validation_messages = None
+        self._show_encoder_status_preview()
+
         # Populate the UI with the loaded data.
         self.slide_table_manager.populate_slide_table_from_model()
         self.slide_table_manager.toggle_previews(self.preview_pinp_checkbox.isChecked())
@@ -1105,6 +1190,9 @@ class MainWindow(QWidget):
             app_settings.add_recent_project(str(self._pending_recent_path))
             self._pending_recent_path = None
             self._rebuild_recent_menu()
+
+        # A freshly loaded project matches its saved state; start clean.
+        self._clear_dirty()
 
         self.state_machine.transition_to(AppState.PROJECT_LOADED_UIPOPULATED)
 
@@ -1141,7 +1229,8 @@ class MainWindow(QWidget):
             return
 
         self._sync_ui_to_model()
-        self.settings_manager.save_project_settings(self.project_model)
+        if self.settings_manager.save_project_settings(self.project_model):
+            self._clear_dirty()
 
     def open_project_folder(self):
         if self.project_model.project_folder:
@@ -1188,13 +1277,8 @@ class MainWindow(QWidget):
         repo_path = repo_url.replace("https://github.com/", "")
         api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
 
-        try:
-            from packaging.version import parse as parse_version
-        except ImportError:
-            self.write_debug("[WARNING] 'packaging' library not found. Skipping update check. Please run 'pip install packaging'.", 'app')
-            QMessageBox.warning(self, self.tr("Check Failed"), self.tr("'packaging' library not found. Please run 'pip install packaging'."))
-            return
-
+        # parse_version is imported at module scope; no in-function import guard is
+        # needed (a missing 'packaging' would already fail the module import).
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
         try:
@@ -1251,10 +1335,38 @@ class MainWindow(QWidget):
         
         self.worker_manager.start_validation(self.validator, self.project_model, self.available_encoders_map)
 
+    def _show_encoder_status_preview(self):
+        """Render the available-encoder matrix in the 'Validation Result' tab
+        before any validation has run.
+
+        Based on the startup encoder check, this lets the user see which
+        software/hardware encoders are functional without first running
+        'Check Files'. An actual validation report always takes precedence, so
+        the preview is skipped whenever one is already displayed.
+        """
+        if self.last_validation_messages is not None:
+            return
+
+        messages = self.validator.build_encoder_status_messages(self.available_encoders_map)
+        if not messages.encoder_info:
+            # No FFmpeg / encoder information is available yet (e.g. FFmpeg was not
+            # found). Leave the tab empty rather than showing an empty report shell.
+            self.validation_results_text.setHtml("")
+            return
+
+        self.validation_results_text.setHtml(
+            messages.assemble_html(theme=self.current_theme, include_verdict=False)
+        )
+
     def on_validation_finished(self, messages: ValidationMessages, page_count: int, snapshot: dict):
         if self.state_machine.state != AppState.VALIDATING:
             self.write_debug(f"[INFO] Validation result was ignored because the state was '{self.state_machine.state.name}', not 'VALIDATING'.")
             self.on_worker_thread_finished()
+            # A cancel that landed after validation had already completed leaves the
+            # app stuck in CANCELLING (every control, including Cancel, is disabled).
+            # Recover to a usable state instead of freezing.
+            if self.state_machine.state == AppState.CANCELLING:
+                self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
             return
 
         self.on_worker_thread_finished()
@@ -1390,7 +1502,9 @@ class MainWindow(QWidget):
             formatted_time = self._format_elapsed_time(elapsed_time)
             QMessageBox.information(self, self.tr('Success'), self.tr('{0} created successfully at {1}\nTime taken: {2}').format(process_name, message, formatted_time))
         elif message != "Canceled by user.":
-            QMessageBox.critical(self, self.tr('Error'), self.tr('An error occurred during {0} creation:\n{1}').format(process_name.lower(), message))
+            # Use the translated noun as-is; lowercasing it breaks non-English text
+            # and only ever produced ASCII-cased English.
+            QMessageBox.critical(self, self.tr('Error'), self.tr('An error occurred during {0} creation:\n{1}').format(process_name, message))
         
         self.progress_bar.setValue(0)
 
@@ -1408,23 +1522,26 @@ class MainWindow(QWidget):
         self.ui_manager.update_folder_label(self.project_folder_label, None)
         self.ui_manager.update_folder_label(self.output_folder_label, None)
         self.filename_input.setText("")
-        self.validation_results_text.setHtml("")
         self.total_duration_label.setText(self.tr("Total Estimated Duration: 0s"))
         self.has_validated_once = False
         self.last_validation_messages = None
         self.validation_snapshot = {}
+        # No project is loaded and nothing has been validated, so restore the
+        # encoder-matrix preview instead of leaving the tab blank.
+        self._show_encoder_status_preview()
+        self._clear_dirty()
 
     def select_project_folder(self, force_folder: Path = None):
         folder_path = None
         if force_folder:
             folder_path = force_folder
         else:
-            documents_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-            default_dir = app_settings.get_last_dir("project", documents_dir)
+            # Always start from the Desktop; the previous location is intentionally
+            # not remembered for project selection.
+            default_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
             folder_str = QFileDialog.getExistingDirectory(self, self.tr("Select Project Folder"), dir=default_dir)
             if folder_str:
                 folder_path = Path(folder_str)
-                app_settings.set_last_dir("project", folder_str)
 
         if not folder_path:
             return
@@ -1480,6 +1597,7 @@ class MainWindow(QWidget):
         self.write_debug(f"[INFO] Output folder selected: {selected_folder}")
         self.project_model.output_folder = selected_folder
         self.ui_manager.update_folder_label(self.output_folder_label, self.project_model.output_folder)
+        self._mark_dirty()
         if self.state_machine.state == AppState.PREPARE_TO_VALIDATE:
             self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
         else:
@@ -1554,7 +1672,7 @@ class MainWindow(QWidget):
                 event.ignore()
                 return
         else:
-            if self.has_validated_once and current_state in [AppState.READY_TO_VALIDATE, AppState.PREPARE_TO_VALIDATE]:
+            if self._dirty:
                 reply = QMessageBox.question(
                     self, self.tr('Confirm Exit'),
                     self.tr("You have unsaved changes. Are you sure you want to exit?"),
@@ -1571,19 +1689,42 @@ class MainWindow(QWidget):
         self.worker_manager.shutdown_transient_worker()
 
         if self.installer_thread and self.installer_thread.isRunning():
+            # run() blocks in a package-manager subprocess, so quit() cannot stop it.
+            # Fall back to terminate() so the QThread is not destroyed while running
+            # (which would abort the process with a fatal Qt error on exit).
             self.installer_thread.quit()
-            self.installer_thread.wait(5000)
+            if not self.installer_thread.wait(5000):
+                self.installer_thread.terminate()
+                self.installer_thread.wait()
 
         self.worker_manager.shutdown_persistent_workers()
 
         event.accept()
 
     def parameters_changed_event(self, _=None):
+        self._mark_dirty()
         if self.state_machine.state in [AppState.VALIDATED, AppState.READY_TO_VALIDATE, AppState.PREPARE_TO_VALIDATE]:
             if self.project_model.output_folder:
                  self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
             else:
                  self.state_machine.transition_to(AppState.PREPARE_TO_VALIDATE)
+
+    def _mark_dirty(self):
+        self._dirty = True
+
+    def _clear_dirty(self):
+        self._dirty = False
+
+    def _confirm_discard_changes(self) -> bool:
+        # Returns True when it is safe to proceed (no unsaved edits, or the user
+        # accepts losing them). Used before loading another project or exiting.
+        if not self._dirty:
+            return True
+        reply = QMessageBox.question(
+            self, self.tr('Unsaved Changes'),
+            self.tr("You have unsaved changes that will be lost.\n\nDo you want to continue?"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return reply == QMessageBox.Yes
 
     def write_debug(self, text, source='app'):
         color_map = {
@@ -1779,14 +1920,16 @@ class MainWindow(QWidget):
         return final_message
 
     def _check_and_handle_pdf_changes(self) -> bool:
+        # Returns False to signal "do not proceed"; it must not itself destroy the
+        # loaded project. The load-path caller (on_state_changed) clears the project
+        # on False, while the re-validation caller (run_validation) simply aborts,
+        # so an accidental Cancel here no longer discards unsaved slide edits.
         try:
             pdf_path = self._find_single_pdf(self.project_model.project_folder)
             if not pdf_path:
-                self._cancel_folder_selection()
                 return False
         except (FileNotFoundError, ValueError) as e:
             QMessageBox.critical(self, self.tr("PDF Error"), str(e))
-            self._cancel_folder_selection()
             return False
 
         current_pdf_hash = self.validator._get_file_hash(pdf_path)
@@ -1823,12 +1966,10 @@ class MainWindow(QWidget):
             if msg_box.clickedButton() == migrate_button:
                 return self._migrate_slide_data(pdf_path)
             elif msg_box.clickedButton() == reinit_button:
-                self._initialize_new_project(pdf_path)
-                return True
+                return self._initialize_new_project(pdf_path)
             else:
-                self._cancel_folder_selection()
                 return False
-        
+
         elif self.validator.validated_pdf_hash and old_page_count > 0 and old_page_count == new_page_count:
              self.write_debug("[INFO] PDF content changed without altering page structure. Auto-updating thumbnails.")
              self.validator.compute_and_populate_pdf_details(self.project_model)
@@ -1839,32 +1980,31 @@ class MainWindow(QWidget):
              self.validator.validated_pdf_hash = current_pdf_hash
         else:
             if old_page_count == 0:
-                self._initialize_new_project(pdf_path)
+                return self._initialize_new_project(pdf_path)
             else:
                 self.write_debug("[INFO] New project loaded. No previous PDF state to compare against.")
-        
+
         return True
 
-    def _cancel_folder_selection(self):
-        self.write_debug("[INFO] User cancelled the project folder operation.")
-        self._clear_project()
-        self.state_machine.transition_to(AppState.AWAITING_PROJECT)
-
-    def _initialize_new_project(self, pdf_path: Path):
+    def _initialize_new_project(self, pdf_path: Path) -> bool:
+        # Returns success. On failure it does NOT clear the project itself; the caller
+        # (via a False return from _check_and_handle_pdf_changes) decides whether to
+        # clear, keeping the clear/transition policy in one place.
         self.write_debug("[INFO] Initializing new project from PDF.")
-        self.project_model.slides.clear()
-        
         try:
+            # Read the page count before mutating the model, so a failure here leaves
+            # the current slides intact rather than half-cleared.
             page_count = pdf_utils.page_count(pdf_path)
             self.project_model.slides = [Slide() for _ in range(page_count)]
             self._rescan_available_materials()
-            
+
             self.validator.compute_and_populate_pdf_details(self.project_model)
-            
+
             self.slide_table_manager.populate_slide_table_from_model()
+            return True
         except Exception as e:
             QMessageBox.critical(self, self.tr("Error Initializing Project"), self.tr("Could not process the PDF file: {0}").format(e))
-            self._cancel_folder_selection()
+            return False
 
     def _migrate_slide_data(self, pdf_path: Path) -> bool:
         self.write_debug("[INFO] Starting slide data migration process.")
@@ -1880,12 +2020,12 @@ class MainWindow(QWidget):
             return False
 
         if not self._start_pdf_migration(old_slides, new_pdf_details):
-            # User cancelled the migration dialog.
+            # User cancelled the migration dialog; restore the slides they had and
+            # let the caller decide whether to keep or clear the project.
             self.project_model.slides = old_slides
             self.slide_table_manager.populate_slide_table_from_model()
-            self._cancel_folder_selection()
             return False
-            
+
         return True
 
     def _start_pdf_migration(self, old_slides: list[Slide], new_pdf_details: dict) -> bool:

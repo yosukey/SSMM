@@ -85,8 +85,15 @@ def _find_ffmpeg_pair() -> tuple[Path, Path, str]:
 
 def _get_ffmpeg_pair_info() -> tuple[Path, Path, str]:
     global _ffmpeg_pair_cache
-    if _ffmpeg_pair_cache is None:
-        _ffmpeg_pair_cache = _find_ffmpeg_pair()
+    if _ffmpeg_pair_cache is not None:
+        cached_ffmpeg, cached_ffprobe, _ = _ffmpeg_pair_cache
+        # Invalidate if the cached binaries have since been moved or removed, so a
+        # mid-session change (installing ffmpeg, or deleting ~/ffmpeg-bin) is picked
+        # up without requiring a restart.
+        if cached_ffmpeg.is_file() and cached_ffprobe.is_file():
+            return _ffmpeg_pair_cache
+        _ffmpeg_pair_cache = None
+    _ffmpeg_pair_cache = _find_ffmpeg_pair()
     return _ffmpeg_pair_cache
 
 def get_ffmpeg_path() -> Path:
@@ -105,6 +112,9 @@ def get_ffmpeg_source() -> str:
         return 'not_found'
 
 def bundled_ffmpeg_exists() -> bool:
+    # Resolution requires BOTH ffmpeg and ffprobe, so report a bundled fallback only
+    # when both are present; checking ffmpeg alone lets callers believe a bundle
+    # exists while resolution then fails on the missing ffprobe.
     suffix = '.exe' if platform.system() == 'Windows' else ''
-    bundled_path = resolve_resource_path(Path('resources') / 'ffmpeg' / 'bin' / f'ffmpeg{suffix}')
-    return bundled_path.exists() and bundled_path.is_file()
+    bundled_dir = resolve_resource_path(Path('resources') / 'ffmpeg' / 'bin')
+    return (bundled_dir / f'ffmpeg{suffix}').is_file() and (bundled_dir / f'ffprobe{suffix}').is_file()

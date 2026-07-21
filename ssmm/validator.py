@@ -4,6 +4,7 @@ import hashlib
 import html
 import io
 import json
+import math
 import platform
 import re
 import subprocess
@@ -29,11 +30,19 @@ except Exception:
     def load_capabilities():
         return {"EDITION": "B", "FFMPEG_INSTALL_MENU": True}
 
-def check_encoder_functionality(encoder_name: str) -> bool:
+def check_encoder_functionality(encoder_name: str) -> tuple[bool, str]:
+    """Run a tiny encode to confirm the encoder actually works on this machine.
+
+    Returns (is_functional, detail). On failure, ``detail`` carries the reason
+    (ffmpeg's stderr, or a timeout/launch note) so callers can surface *why* an
+    encoder failed instead of a bare "not functional". For example, an AMD GPU
+    without a HEVC encode block reports
+    ``CreateComponent(AMFVideoEncoderHW_HEVC) failed with error 30`` here.
+    """
     try:
         ffmpeg_path = str(get_ffmpeg_path())
     except FileNotFoundError:
-        return False
+        return False, "ffmpeg executable not found."
 
     command_list = [
         ffmpeg_path,
@@ -57,9 +66,14 @@ def check_encoder_functionality(encoder_name: str) -> bool:
             timeout=config.ENCODER_TEST_TIMEOUT_S,
             creationflags=config.SUBPROCESS_CREATION_FLAGS
         )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, Exception):
-        return False
+        if result.returncode == 0:
+            return True, ""
+        detail = (result.stderr or "").strip() or f"ffmpeg exited with code {result.returncode}."
+        return False, detail
+    except subprocess.TimeoutExpired:
+        return False, f"Test timed out after {config.ENCODER_TEST_TIMEOUT_S}s."
+    except Exception as e:
+        return False, f"Could not run encoder test: {e}"
 
 class ProjectValidator:
     def __init__(self, logger=None):
@@ -76,33 +90,37 @@ class ProjectValidator:
         if not file_hash:
             return
 
-        if file_hash in self.info_cache:
-            cached_data = self.info_cache[file_hash]
-            slide.duration = cached_data['duration']
-            slide.tech_info = cached_data['tech_info']
-            slide.is_video = cached_data['is_video']
-            slide.audio_streams = cached_data['audio_streams']
-            return
+        if file_hash not in self.info_cache:
+            has_video_ext = material_path.suffix.lower() in config.SUPPORTED_VIDEO_FORMATS
+            duration, video_info, audio_streams = self._get_media_info(material_path)
 
-        is_video = material_path.suffix.lower() in config.SUPPORTED_VIDEO_FORMATS
-        slide.is_video = is_video
-        
-        duration, video_info, audio_streams = self._get_media_info(material_path)
-        
-        slide.duration = duration
-        slide.audio_streams = audio_streams
+            # Classify by the streams ffprobe actually found, not by the file extension.
+            # A container with a video extension but no decodable video stream (e.g. an
+            # audio-only .mp4/.mov) must be treated as audio, not as a PinP video —
+            # otherwise its empty tech_info later triggers 'None > 0' TypeErrors and the
+            # renderer tries to overlay a non-existent video stream.
+            is_video = has_video_ext and bool(video_info)
+            if is_video:
+                tech_info = video_info
+            elif audio_streams:
+                tech_info = audio_streams[0]
+            else:
+                tech_info = {}
 
-        if is_video and video_info:
-            slide.tech_info = video_info
-        elif not is_video and audio_streams:
-            slide.tech_info = audio_streams[0]
-        
-        self.info_cache[file_hash] = {
-            'duration': slide.duration,
-            'tech_info': slide.tech_info,
-            'is_video': slide.is_video,
-            'audio_streams': slide.audio_streams,
-        }
+            self.info_cache[file_hash] = {
+                'duration': duration,
+                'tech_info': tech_info,
+                'is_video': is_video,
+                'audio_streams': audio_streams,
+            }
+
+        cached_data = self.info_cache[file_hash]
+        slide.duration = cached_data['duration']
+        slide.is_video = cached_data['is_video']
+        # Always hand the slide its own copies of the mutable structures so an in-place
+        # edit of one slide cannot corrupt the shared cache or any sibling slide.
+        slide.tech_info = dict(cached_data['tech_info'])
+        slide.audio_streams = [dict(s) for s in cached_data['audio_streams']]
 
     def _render_pdf_page_for_preview(self, pdf_path: Path, page_num: int) -> Optional[Image.Image]:
         doc = None
@@ -156,7 +174,7 @@ class ProjectValidator:
             self.log("[WARNING] No project folder set, cannot compute PDF details.")
             return
 
-        pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None)
+        pdf_path = next(iter(sorted(project_model.project_folder.glob('*.[pP][dD][fF]'))), None)
         if not pdf_path:
             self.log("[WARNING] No PDF found, cannot compute page details.")
             return
@@ -292,7 +310,10 @@ class ProjectValidator:
             if not result.stdout:
                 return set()
 
-            encoder_pattern = re.compile(r"^\s*[VAS.FXBD-]+\s+(\S+)")
+            # Restrict the captured name to valid encoder-name characters so the
+            # legend lines in ffmpeg's header (e.g. " V..... = Video") do not add the
+            # junk token "=" to the set.
+            encoder_pattern = re.compile(r"^\s*[VAS.FXBD-]+\s+([A-Za-z0-9_-]+)")
             lines = result.stdout.splitlines()
             for line in lines:
                 if self._is_canceled:
@@ -320,7 +341,8 @@ class ProjectValidator:
             if self._is_canceled: break
             if sw_encoder in all_available_encoders:
                 log_messages.append(f"[INFO] Testing software encoder {sw_encoder}...")
-                if check_encoder_functionality(sw_encoder):
+                is_functional, detail = check_encoder_functionality(sw_encoder)
+                if is_functional:
                     log_messages.append(f"  -> [SUCCESS] '{sw_encoder}' is functional.")
                     for codec, encoders in config.SUPPORTED_CODEC_CHECKS.items():
                         if sw_encoder in encoders:
@@ -329,6 +351,8 @@ class ProjectValidator:
                             break
                 else:
                     log_messages.append(f"  -> [FAILED] '{sw_encoder}' is not functional.")
+                    if detail:
+                        log_messages.append(f"       Reason: {detail}")
             else:
                  log_messages.append(f"  -> [SKIP] '{sw_encoder}' not found in 'ffmpeg -encoders' list.")
         
@@ -366,13 +390,16 @@ class ProjectValidator:
 
                 if hw_encoder in all_available_encoders:
                     log_messages.append(f"[INFO] Testing {hw_family} encoder for {codec}: {hw_encoder}...")
-                    if check_encoder_functionality(hw_encoder):
+                    is_functional, detail = check_encoder_functionality(hw_encoder)
+                    if is_functional:
                         log_messages.append(f"  -> [SUCCESS] '{hw_encoder}' is functional.")
                         if codec not in functional_map:
                             functional_map[codec] = []
                         functional_map[codec].append(hw_encoder)
                     else:
                         log_messages.append(f"  -> [FAILED] '{hw_encoder}' is not functional.")
+                        if detail:
+                            log_messages.append(f"       Reason: {detail}")
                         if codec == "H.264/MPEG-4 AVC":
                             family_failed = True
                             log_messages.append(f"  -> [SKIP] H.264 failed, skipping further tests for the '{hw_family}' family.")
@@ -402,7 +429,19 @@ class ProjectValidator:
         self.log("[INFO] --- Phase 2/4: Analyzing PDF file ---")
 
         page_count = 0
-        pdf_path = next(project_model.project_folder.glob('*.[pP][dD][fF]'), None) if project_model.project_folder else None
+        # Sort so the chosen PDF is deterministic regardless of filesystem order, and
+        # flag the presence of extra PDFs (a second PDF added after loading would
+        # otherwise let validation, thumbnails and rendering diverge on which file to use).
+        pdf_files = sorted(project_model.project_folder.glob('*.[pP][dD][fF]')) if project_model.project_folder else []
+        pdf_path = pdf_files[0] if pdf_files else None
+
+        if len(pdf_files) > 1:
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator",
+                "Multiple PDF files were found in the project folder.<br><br>"
+                "<b>[Cause]</b><br>"
+                "The application requires exactly one PDF file to serve as the base for the slideshow.<br><br>"
+                "<b>[Action]</b><br>"
+                "Please remove the extra PDF file(s) so that only one remains, then validate again."))
 
         if not pdf_path:
             msg = QCoreApplication.translate("ProjectValidator",
@@ -420,6 +459,11 @@ class ProjectValidator:
             # Condition 1: PDF unchanged (hash matches).
             if self.validated_pdf_hash and self.validated_pdf_hash == current_pdf_hash:
                 self.log("[INFO] PDF file has not changed. Skipping detailed PDF analysis.")
+                # The aspect-ratio check compares the PDF against the selected output
+                # resolution, which the user may have changed since the last validation.
+                # Run it even on the unchanged-PDF fast path so the "black bars will be
+                # added" warning is not silently suppressed after a resolution change.
+                self._check_pdf_file(project_model, messages, pdf_path)
                 page_count = len(project_model.slides)
             
             # Condition 2: Minor change (hash differs, but page count is the same).
@@ -464,10 +508,14 @@ class ProjectValidator:
             for entry in project_model.project_folder.iterdir():
                 if self._is_canceled: break
                 if entry.is_file() and entry.suffix.lower() in all_formats:
-                    try:
-                        file_hashes_snapshot[entry.name] = self._get_file_hash(entry)
-                    except (IOError, OSError) as e:
-                        messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "Could not create hash for file {0}: {1}").format(entry.name, e))
+                    # _get_file_hash returns "" (never raises) when a file cannot be
+                    # read. Surface that as a warning instead of recording an empty hash,
+                    # which would compare equal to any other unreadable file.
+                    file_hash = self._get_file_hash(entry)
+                    if file_hash:
+                        file_hashes_snapshot[entry.name] = file_hash
+                    else:
+                        messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "Could not create a hash for file {0}; it may be unreadable.").format(entry.name))
 
         if self._is_canceled: return messages, page_count, file_hashes_snapshot
 
@@ -576,6 +624,18 @@ class ProjectValidator:
         if effective_filename.endswith('.') or effective_filename.endswith(' '):
             messages.add_project_error(QCoreApplication.translate("ProjectValidator", "The filename cannot end with a period or a space."))
             return
+
+    def build_encoder_status_messages(self, available_encoders: dict) -> ValidationMessages:
+        """Build a ValidationMessages containing only the FFmpeg/encoder summary
+        (source, version and the available-encoder matrix).
+
+        This reuses the exact summary the full validation report shows, so it can
+        be rendered in the 'Validation Result' tab as a preview right after the
+        startup encoder check — before any project validation has run.
+        """
+        messages = ValidationMessages()
+        self._add_encoder_summary_notice(messages, available_encoders)
+        return messages
 
     def _add_encoder_summary_notice(self, messages: ValidationMessages, available_encoders: dict):
         try:
@@ -721,11 +781,22 @@ class ProjectValidator:
                     tech_info_html = []
                     
                     if material_name in used_materials:
-                        status_html = "<span class='status used'>✔ IN USE</span> "
+                        status_html = "<span class='status used'>✔ IN USE</span>"
                     else:
-                        status_html = "<span class='status unused'>UNUSED</span> "
+                        status_html = "<span class='status unused'>UNUSED</span>"
 
-                    header = f"{status_html}<b>{html.escape(material_name)}</b> ({'Audio' if not is_video else 'PinP Video'})"
+                    # Lead with the filename so the list reads as a list of files;
+                    # the in-use/unused badge is a right-aligned attribute of each row.
+                    # QTextEdit ignores flexbox/auto-margins, so the split alignment
+                    # is done with a full-width table (align='right' on the status cell).
+                    type_label = 'Audio' if not is_video else 'PinP Video'
+                    name_html = f"<b>{html.escape(material_name)}</b> ({type_label})"
+                    header = (
+                        "<table class='file-title-table' width='100%'><tr>"
+                        f"<td class='file-title-name'>{name_html}</td>"
+                        f"<td class='file-title-status' align='right'>{status_html}</td>"
+                        "</tr></table>"
+                    )
                     tech_info_html = [header]
                     if is_video:
                         w, h, codec, bitrate, fps, dar_str = tech_info.get('width'), tech_info.get('height'), tech_info.get('codec'), tech_info.get('bitrate'), tech_info.get('fps'), tech_info.get('dar')
@@ -916,15 +987,25 @@ class ProjectValidator:
             messages.add_project_error(msg)
             return
 
+        fps = project_model.parameters.fps
+
+        def q(seconds):
+            # Mirror VideoProcessor._quantize_duration_for_fps so the 10-second minimum
+            # is checked against the actually-rendered timeline (each duration/interval
+            # is rounded up to the FPS grid), not the raw values.
+            if seconds <= 0 or fps <= 0:
+                return 0.0
+            return math.ceil(seconds * fps) / fps
+
         chapters = []
         current_time = 0.0
         for i, slide in enumerate(project_model.slides):
             if slide.chapter_title:
                 chapters.append({'title': slide.chapter_title, 'start_time': current_time, 'slide_num': i + 1})
-            
-            current_time += slide.duration
+
+            current_time += q(slide.duration)
             if i < len(project_model.slides) - 1:
-                current_time += slide.interval_to_next
+                current_time += q(slide.interval_to_next)
 
         if not chapters or chapters[0]['start_time'] != 0.0:
             msg = QCoreApplication.translate("ProjectValidator",
@@ -994,8 +1075,14 @@ class ProjectValidator:
                 usage_warnings = []
                 if slide.tech_info.get('fps', 0) > (params.fps * 1.1):
                     usage_warnings.append(QCoreApplication.translate("ProjectValidator", "Source FPS ({0}) is higher than the output FPS ({1}). This may result in less smooth motion as frames will be dropped.").format(slide.tech_info.get('fps'), params.fps))
-                if pinp_geometry['height'] > slide.tech_info.get('height', 0):
-                    usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be upscaled from {0}px to {1}px height, which may reduce its visual quality.").format(slide.tech_info.get('height', 0), round(pinp_geometry['height'])))
+                # For a 90/270-rotated video the effective source height is the coded
+                # width, so compare against that to match how the frame is displayed.
+                rotation = slide.tech_info.get('rotate')
+                source_height = (slide.tech_info.get('width', 0)
+                                 if rotation in ["90", "270", "-90"]
+                                 else slide.tech_info.get('height', 0))
+                if pinp_geometry['height'] > source_height:
+                    usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be upscaled from {0}px to {1}px height, which may reduce its visual quality.").format(source_height, round(pinp_geometry['height'])))
                 if pinp_geometry['width'] > output_width:
                     usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be scaled to {0}px width, which is wider than the output frame ({1}px).").format(round(pinp_geometry['width']), output_width))
                 
@@ -1064,11 +1151,16 @@ class ProjectValidator:
             
             overall_bitrate_bps_str = format_data.get('bit_rate')
 
+            streams = data.get('streams', [])
+            # The container bitrate is only a safe fallback for an audio stream when the
+            # file has no video (otherwise it includes the video bitrate).
+            has_video_stream = any(s.get('codec_type') == 'video' for s in streams)
+
             video_info = {}
             audio_streams = []
             first_video_found = False
-            
-            for stream in data.get('streams', []):
+
+            for stream in streams:
                 if stream.get('codec_type') == 'video' and not first_video_found:
                     first_video_found = True
 
@@ -1139,7 +1231,8 @@ class ProjectValidator:
                          bitrate_val = 'Lossless (ALAC)'
                     else:
                         stream_bitrate_str = stream.get('bit_rate')
-                        bitrate_to_parse = stream_bitrate_str or overall_bitrate_bps_str or '0'
+                        container_fallback = overall_bitrate_bps_str if not has_video_stream else None
+                        bitrate_to_parse = stream_bitrate_str or container_fallback or '0'
                         try:
                             bitrate_val = int(float(bitrate_to_parse) / 1000)
                         except (ValueError, TypeError):

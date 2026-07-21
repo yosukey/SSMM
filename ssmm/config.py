@@ -1,6 +1,7 @@
 # config.py
 import sys
 import subprocess
+from pathlib import Path
 
 SUBPROCESS_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform.startswith('win') else 0
 
@@ -11,6 +12,9 @@ def get_version():
             capture_output=True,
             text=True,
             check=True,
+            # Pin to this repo's root so the version is not read from an unrelated git
+            # repository that happens to be the process's working directory.
+            cwd=str(Path(__file__).resolve().parent.parent),
             creationflags=SUBPROCESS_CREATION_FLAGS
         )
         version = git_process.stdout.strip().lstrip('v')
@@ -24,7 +28,11 @@ REPO_URL = "https://github.com/yosukey/SSMM"
 ENCODER_TEST_TIMEOUT_S = 15
 FFPROBE_TIMEOUT_S = 15
 WAVEFORM_GEN_TIMEOUT_S = 30
-WAVEFORM_COLOR = "#3DAEE9"
+# Upper bound for a package-manager FFmpeg install; a hung installer must not block
+# the modal progress dialog indefinitely.
+FFMPEG_INSTALL_TIMEOUT_S = 600
+# Indigo brand accent, rendered onto the dark waveform canvas (theme.MEDIA_BACKDROP).
+WAVEFORM_COLOR = "#8b97e6"
 PROCESS_START_TIMEOUT_MS = 10000
 FFMPEG_ENCODE_TIMEOUT_MS = 36000000
 
@@ -215,7 +223,11 @@ ENCODER_TO_HARDWARE_MAP = {
 }
 
 FILENAME_ILLEGAL_CHARS = r'<>:"/\|?*'
-FILENAME_MAX_LENGTH = 240
+# Byte budget for the user's base output name. Kept well under the 255-byte
+# filesystem limit so derived names still fit — the longest is the YouTube chapter
+# file, "<stem>-chapter-for-youtube.txt", whose stem also carries an optional
+# duration suffix (~34 bytes of overhead total).
+FILENAME_MAX_LENGTH = 200
 FILENAME_RESERVED_NAMES = (
     'CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
     'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
