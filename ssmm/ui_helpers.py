@@ -16,7 +16,10 @@ from ssmm.utils import resolve_resource_path, get_ffmpeg_path
 from ssmm.watermark import render_watermark_overlay
 
 
-def generate_waveform_pixmap(audio_path: Path, width: int, height: int) -> Optional[QPixmap]:
+def generate_waveform_png_bytes(audio_path: Path, width: int, height: int) -> Optional[bytes]:
+    # Thread-safe: runs ffmpeg and returns raw PNG bytes without touching any GUI
+    # object, so it can be called from a worker thread. QPixmap must NOT be created
+    # off the GUI thread, so the caller builds the pixmap from these bytes itself.
     try:
         ffmpeg_path = get_ffmpeg_path()
     except Exception:
@@ -41,12 +44,20 @@ def generate_waveform_pixmap(audio_path: Path, width: int, height: int) -> Optio
         )
         if result.returncode != 0 or not result.stdout:
             return None
-        pixmap = QPixmap()
-        if pixmap.loadFromData(result.stdout, "PNG"):
-            return pixmap
-        return None
+        return bytes(result.stdout)
     except Exception:
         return None
+
+
+def generate_waveform_pixmap(audio_path: Path, width: int, height: int) -> Optional[QPixmap]:
+    # GUI-thread only (creates a QPixmap).
+    data = generate_waveform_png_bytes(audio_path, width, height)
+    if not data:
+        return None
+    pixmap = QPixmap()
+    if pixmap.loadFromData(data, "PNG"):
+        return pixmap
+    return None
 
 
 def render_pdf_page_to_pixmap(pdf_path: Optional[Path], page_index: int, target_width: int) -> Optional[QPixmap]:
@@ -123,7 +134,8 @@ def calculate_pinp_geometry(slide: Slide, output_width: int, output_height: int)
     dar_str = slide.tech_info.get('dar')
 
     rotation = slide.tech_info.get('rotate')
-    if rotation in ["90", "270", "-90"]:
+    is_rotated_90 = rotation in ["90", "270", "-90"]
+    if is_rotated_90:
         video_width, video_height = video_height, video_width
 
     if video_height <= 0:
@@ -136,6 +148,10 @@ def calculate_pinp_geometry(slide: Slide, output_width: int, output_height: int)
             num, den = map(int, dar_str.split(':'))
             if num > 0 and den > 0:
                 aspect_ratio = num / den
+                if is_rotated_90:
+                    # DAR describes the un-rotated (coded) frame; invert it to match
+                    # the rotated display orientation so the PinP box is not stretched.
+                    aspect_ratio = 1.0 / aspect_ratio
         except (ValueError, TypeError):
             pass
 

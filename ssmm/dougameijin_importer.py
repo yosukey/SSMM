@@ -1,7 +1,7 @@
 # dougameijin_importer.py
-import io
 import json
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -60,12 +60,6 @@ def _check_archive_safety(zf: zipfile.ZipFile):
             raise ValueError("The DougaMeijin archive is too large to load (possible zip bomb).")
 
 
-def _load_image_as_rgb(image_bytes: bytes) -> Image.Image:
-    """Decode page image bytes into an opaque RGB image for PDF embedding."""
-    with Image.open(io.BytesIO(image_bytes)) as img:
-        return img.convert("RGB")
-
-
 def import_project(dmj_path, extract_dir=None, log=None) -> ProjectModel:
     def _log(msg, source='app'):
         if log:
@@ -107,8 +101,11 @@ def import_project(dmj_path, extract_dir=None, log=None) -> ProjectModel:
 
             names = set(zf.namelist())
 
-            # Validate that every page's image is present before touching disk.
+            # Validate that every page is well-formed and its image is present before
+            # touching disk.
             for idx, page in enumerate(pages):
+                if not isinstance(page, dict):
+                    raise ValueError(f"Page {idx + 1} in the DougaMeijin project is malformed (expected an object).")
                 image_rel = page.get("image")
                 if not image_rel:
                     raise ValueError(f"Page {idx + 1} in the DougaMeijin project has no image reference.")
@@ -127,17 +124,25 @@ def import_project(dmj_path, extract_dir=None, log=None) -> ProjectModel:
 
             pdf_path = dest_folder / f"{dmj_path.stem}.pdf"
             slides = []
-            page_images = []
 
-            try:
+            # Stage page images on disk (compressed) and build the PDF one page at a
+            # time, so peak memory stays at ~2 decoded frames regardless of page count
+            # instead of holding every decoded bitmap at once (which could OOM on a
+            # large deck well under the 8 GiB archive guard).
+            with tempfile.TemporaryDirectory(dir=dest_folder, prefix=".pdf-src-") as img_tmp_dir:
+                img_tmp = Path(img_tmp_dir)
+                image_tmp_paths = []
+
                 for idx, page in enumerate(pages):
                     image_rel = page["image"]
+                    tmp_img = img_tmp / f"page_{idx:05d}{Path(image_rel).suffix or '.img'}"
                     try:
-                        page_images.append(_load_image_as_rgb(zf.read(image_rel)))
+                        tmp_img.write_bytes(zf.read(image_rel))
                     except Exception as e:
                         raise ValueError(
                             f"Failed to read image '{image_rel}' for page {idx + 1}: {e}"
                         )
+                    image_tmp_paths.append(tmp_img)
 
                     slide = Slide()
                     slide.transition_to_next = global_transition
@@ -166,13 +171,18 @@ def import_project(dmj_path, extract_dir=None, log=None) -> ProjectModel:
 
                     slides.append(slide)
 
-                # Each image becomes one PDF page (matching DougaMeijin page order).
-                page_images[0].save(
-                    pdf_path, "PDF", save_all=True, append_images=page_images[1:]
-                )
-            finally:
-                for img in page_images:
-                    img.close()
+                def _rgb_pages():
+                    # Decode lazily so only the page currently being written is in memory.
+                    for p in image_tmp_paths:
+                        with Image.open(p) as im:
+                            yield im.convert("RGB")
+
+                pages_iter = _rgb_pages()
+                first_page = next(pages_iter)
+                try:
+                    first_page.save(pdf_path, "PDF", save_all=True, append_images=pages_iter)
+                finally:
+                    first_page.close()
 
         model = ProjectModel()
         model.project_folder = dest_folder

@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
 from ssmm import config
+from ssmm import theme as app_theme
 from ssmm.models import ProjectModel, Slide
 from ssmm.validator import ProjectValidator
 from ssmm.ui_helpers import calculate_pinp_geometry, superimpose_pinp_info, render_pdf_page_to_pixmap, superimpose_watermark
@@ -113,7 +114,8 @@ class SlideTableManager(QObject):
 
         pdf_path = None
         if self.project_model.project_folder:
-            pdf_path = next(self.project_model.project_folder.glob('*.[pP][dD][fF]'), None)
+            # Sorted for a deterministic choice consistent with the validator/renderer.
+            pdf_path = next(iter(sorted(self.project_model.project_folder.glob('*.[pP][dD][fF]'))), None)
 
         try:
             target_width = int(self.project_model.parameters.resolution.split('x')[0])
@@ -160,12 +162,19 @@ class SlideTableManager(QObject):
             self.clear_caches()
             self.table.clearContents()
             
-            headers = ['Thumbnail', 'Material', 'Play', 'Duration', 'Audio Stream', 'Chapter Title', 'PinP Position', 'PinP Scale (% of Height)', 'PinP Effect', 'Interval to Next (sec)', 'Transition to Next']
+            headers = [
+                self.tr('Thumbnail'), self.tr('Material'), self.tr('Play'), self.tr('Duration'),
+                self.tr('Audio Stream'), self.tr('Chapter Title'), self.tr('PinP Position'),
+                self.tr('PinP Scale (% of Height)'), self.tr('PinP Effect'),
+                self.tr('Interval to Next (sec)'), self.tr('Transition to Next'),
+            ]
             self.table.setColumnCount(len(headers))
             self.table.setHorizontalHeaderLabels(headers)
             self.table.setRowCount(len(self.project_model.slides))
-            
-            all_material_choices = [config.SILENT_MATERIAL_NAME] + self.project_model.available_materials
+
+            # Always offer the unassigned option so any row can be returned to
+            # unassigned (previously only rows that were unassigned at build time had it).
+            all_material_choices = [config.UNASSIGNED_MATERIAL_NAME, config.SILENT_MATERIAL_NAME] + self.project_model.available_materials
 
             for idx, slide in enumerate(self.project_model.slides):
                 # Thumbnail (Column 0): Base64 cache from the Slide model
@@ -191,12 +200,10 @@ class SlideTableManager(QObject):
                 
                 # Material ComboBox (Column 1)
                 material_combo = NoWheelComboBox()
+                self._populate_combo_with_tooltips(material_combo, all_material_choices)
                 if slide.filename is None:
-                    current_choices = [config.UNASSIGNED_MATERIAL_NAME] + all_material_choices
-                    self._populate_combo_with_tooltips(material_combo, current_choices)
-                    material_combo.setCurrentIndex(0)
+                    material_combo.setCurrentText(config.UNASSIGNED_MATERIAL_NAME)
                 else:
-                    self._populate_combo_with_tooltips(material_combo, all_material_choices)
                     material_combo.setCurrentText(slide.filename)
 
                 material_combo.currentTextChanged.connect(partial(self.on_material_changed, idx))
@@ -266,9 +273,11 @@ class SlideTableManager(QObject):
                     if file_hash in self.validator.info_cache:
                         cached_data = self.validator.info_cache[file_hash]
                         slide.duration = cached_data.get('duration', 0.0)
-                        slide.tech_info = cached_data.get('tech_info', {})
                         slide.is_video = cached_data.get('is_video', False)
-                        slide.audio_streams = cached_data.get('audio_streams', [])
+                        # Copy so this slide never aliases the shared cache (matches
+                        # ProjectValidator.analyze_material's defensive behavior).
+                        slide.tech_info = dict(cached_data.get('tech_info', {}))
+                        slide.audio_streams = [dict(s) for s in cached_data.get('audio_streams', [])]
                 except Exception as e:
                      self.log_message.emit(f"[ERROR] Could not update slide info from cache for {slide.filename}: {e}")
 
@@ -338,7 +347,8 @@ class SlideTableManager(QObject):
             if not slide.tech_info and slide.duration == 0:
                 # Sub-case 3a: Not yet validated.
                 duration_edit.setText(self.tr("Not validated"))
-                duration_edit.setStyleSheet("color: grey; font-style: italic;")
+                duration_edit.setStyleSheet(
+                    f"color: {app_theme.tokens()['text_faint']}; font-style: italic;")
             else:
                 # Sub-case 3b: Validated.
                 duration_edit.setText(self._format_duration(slide.duration))
@@ -445,13 +455,20 @@ class SlideTableManager(QObject):
         v_scroll_bar.setValue(current_scroll_pos)
     
     def _debounce_action(self, timer_key: str, action: Callable[[], None], delay_ms: int):
-        if timer_key in self.timers:
-            self.timers[timer_key].stop()
-        
-        timer = QTimer(self)
-        timer.setSingleShot(True)
+        # Reuse a single timer per key. Creating a fresh QTimer on every change (each
+        # keystroke/spin step) leaked a dead timer object for the manager's lifetime.
+        timer = self.timers.get(timer_key)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            self.timers[timer_key] = timer
+        else:
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
         timer.timeout.connect(action)
-        self.timers[timer_key] = timer
         timer.start(delay_ms)
 
     def on_table_item_changed(self, row_idx, key, widget, value_override=None):
@@ -545,10 +562,19 @@ class SlideTableManager(QObject):
     def _format_duration(self, seconds, include_msec=True):
         if not isinstance(seconds, (int, float)) or seconds < 0: return ""
         if seconds == 0: return "0s"
-        minutes, rem_seconds = int(seconds // 60), seconds % 60
+        # Round to the displayed precision *before* splitting into minutes/seconds so a
+        # value like 119.6s renders as "2m", never "1m 60s".
+        if include_msec:
+            total = round(seconds, 1)
+            minutes = int(total // 60)
+            rem_seconds = round(total - minutes * 60, 1)
+            sec_str = f"{rem_seconds:.1f}".rstrip('0').rstrip('.')
+        else:
+            total = int(round(seconds))
+            minutes = total // 60
+            rem_seconds = total - minutes * 60
+            sec_str = str(rem_seconds)
         parts = []
         if minutes > 0: parts.append(f"{minutes}m")
-        if rem_seconds > 0:
-            sec_str = f"{rem_seconds:.1f}".rstrip('0').rstrip('.') if include_msec else f"{round(rem_seconds)}"
-            parts.append(f"{sec_str}s")
+        if rem_seconds > 0: parts.append(f"{sec_str}s")
         return " ".join(parts) if parts else (f"{minutes}m" if minutes > 0 else "0s")

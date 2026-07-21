@@ -1,4 +1,5 @@
 # settings_manager.py
+import os
 import toml
 from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -170,7 +171,15 @@ class SettingsManager(QObject):
 
             if material == config.SILENT_MATERIAL_NAME:
                 slide.filename = config.SILENT_MATERIAL_NAME
-                slide.duration = slide_settings.get("duration", 0)
+                # Clamp to the range the duration spinbox accepts; a missing key or an
+                # out-of-range hand-edited value (e.g. 0) would otherwise desync the
+                # displayed duration (clamped to 1) from the model/rendered length.
+                sd_low, sd_high = config.SILENT_DURATION_RANGE
+                try:
+                    raw_duration = float(slide_settings.get("duration", sd_low))
+                except (TypeError, ValueError):
+                    raw_duration = sd_low
+                slide.duration = max(sd_low, min(sd_high, raw_duration))
             elif material in project_model.available_materials:
                 slide.filename = material
             elif material:
@@ -191,8 +200,19 @@ class SettingsManager(QObject):
 
             if slide.is_video:
                 slide.video_position = slide_settings.get("video_position", "Center")
-                slide.video_scale = slide_settings.get("video_scale", config.DEFAULT_VIDEO_SCALE)
-                slide.video_effects = slide_settings.get("video_effects", [])
+                # Clamp the PinP scale to its valid range and drop any effect tokens
+                # that are not recognized, so a hand-edited file cannot inject values
+                # the UI and renderer do not understand.
+                ps_low, ps_high = config.PINP_SCALE_RANGE
+                try:
+                    slide.video_scale = max(ps_low, min(ps_high, int(slide_settings.get("video_scale", config.DEFAULT_VIDEO_SCALE))))
+                except (TypeError, ValueError):
+                    slide.video_scale = config.DEFAULT_VIDEO_SCALE
+                raw_effects = slide_settings.get("video_effects", [])
+                if isinstance(raw_effects, list):
+                    slide.video_effects = [e for e in raw_effects if e in config.VIDEO_EFFECT_MAP]
+                else:
+                    slide.video_effects = []
 
         self.log_message.emit(f"[SUCCESS] Successfully loaded project settings.", 'app')
         return project_model
@@ -229,6 +249,7 @@ class SettingsManager(QObject):
                 reset(int_field, 'not an integer')
 
         enum_checks = {
+            'codec': list(config.SOFTWARE_CODEC_MAP.keys()),
             'resolution': config.RESOLUTION_OPTIONS,
             'fps': config.FPS_OPTIONS,
             'audio_bitrate': config.AUDIO_BITRATE_OPTIONS,
@@ -265,10 +286,10 @@ class SettingsManager(QObject):
                 f"[{low}, {high}]; clamped to {clamped}.", 'app')
             params.encoding_value = clamped
 
-    def save_project_settings(self, project_model: ProjectModel):
+    def save_project_settings(self, project_model: ProjectModel) -> bool:
         if not project_model.project_folder:
             QMessageBox.warning(self.main_window, self.tr("Project Folder Not Set"), self.tr("Please select a project folder before saving settings."))
-            return
+            return False
 
         default_path = project_model.project_folder / "settings.toml"
 
@@ -278,16 +299,25 @@ class SettingsManager(QObject):
         )
 
         file_path_to_save = None
+        use_save_as = False
         if reply == QMessageBox.Yes:
-            file_path_to_save = default_path
-            if file_path_to_save.exists():
+            if default_path.exists():
                 overwrite_reply = QMessageBox.question(
-                    self.main_window, self.tr("Confirm Overwrite"), self.tr("'{0}' already exists. Do you want to overwrite it?").format(file_path_to_save.name),
+                    self.main_window, self.tr("Confirm Overwrite"), self.tr("'{0}' already exists. Do you want to overwrite it?").format(default_path.name),
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No
                 )
-                if overwrite_reply == QMessageBox.No:
-                    return
+                if overwrite_reply == QMessageBox.Yes:
+                    file_path_to_save = default_path
+                else:
+                    # Keep the existing file untouched, but let the user save a copy
+                    # elsewhere instead of silently abandoning the save.
+                    use_save_as = True
+            else:
+                file_path_to_save = default_path
         else:
+            use_save_as = True
+
+        if use_save_as:
             dialog_path, _ = QFileDialog.getSaveFileName(
                 self.main_window, self.tr("Save Project Settings As..."), str(project_model.project_folder),
                 self.tr("Project Settings (*.toml);;All Files (*)")
@@ -296,9 +326,10 @@ class SettingsManager(QObject):
                 file_path_to_save = Path(dialog_path)
 
         if file_path_to_save:
-            self._perform_save(file_path_to_save, project_model)
+            return self._perform_save(file_path_to_save, project_model)
+        return False
 
-    def _perform_save(self, file_path: Path, project_model: ProjectModel):
+    def _perform_save(self, file_path: Path, project_model: ProjectModel) -> bool:
         paths_data = {}
         
         if project_model.project_folder:
@@ -344,7 +375,7 @@ class SettingsManager(QObject):
             params_to_save['integrity_hash'] = calculated_hash
         except Exception as e:
             QMessageBox.critical(self.main_window, self.tr("Error during hash calculation"), self.tr("Could not generate integrity hash. Settings will not be saved.\n\nDetails: {0}").format(e))
-            return
+            return False
 
         validation_data = {
             "pdf_file_hash": self.main_window.validator.validated_pdf_hash or ""
@@ -365,11 +396,32 @@ class SettingsManager(QObject):
             "# Please use the application's user interface to modify project settings.\n\n"
         )
 
+        # Serialize fully before touching the filesystem so a serialization error
+        # cannot leave a half-written file behind.
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(warning_comment)
-                toml.dump(final_toml_data, f)
-
-            QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
-        except IOError as e:
+            full_content = warning_comment + toml.dumps(final_toml_data)
+        except (ValueError, TypeError) as e:
             QMessageBox.critical(self.main_window, self.tr("Error"), self.tr("Failed to save settings: {0}").format(e))
+            return False
+
+        # Write atomically: write to a temp file in the same directory, fsync, then
+        # os.replace() into place. A crash, full disk, or write error mid-save can no
+        # longer truncate or corrupt the existing settings.toml (which the loader would
+        # otherwise silently discard, losing every per-slide setting).
+        tmp_path = file_path.with_name(file_path.name + f".tmp-{os.getpid()}")
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                f.write(full_content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp_path), str(file_path))
+        except OSError as e:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            QMessageBox.critical(self.main_window, self.tr("Error"), self.tr("Failed to save settings: {0}").format(e))
+            return False
+
+        QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
+        return True

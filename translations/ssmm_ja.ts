@@ -988,6 +988,16 @@ Thumbnails have been automatically updated.</source>
         <translation>動画を作成</translation>
     </message>
     <message>
+        <location filename="../ssmm/ui_main.py" line="291" />
+        <source>Set Parameters</source>
+        <translation>パラメーターを設定</translation>
+    </message>
+    <message>
+        <location filename="../ssmm/ui_main.py" line="298" />
+        <source>Validation</source>
+        <translation>検証</translation>
+    </message>
+    <message>
         <location filename="../ssmm/ui_main.py" line="119" />
         <source>Resolution:</source>
         <translation>解像度:</translation>
@@ -1364,6 +1374,20 @@ This will re-encode the final audio track.</source>
         <location filename="../ssmm/ui_state_manager.py" line="115" />
         <source>Cancelling process...</source>
         <translation>処理をキャンセルしています...</translation>
+    </message>
+    <message>
+        <location filename="../ssmm/main_window.py" line="1620" />
+        <source>Unsaved Changes</source>
+        <translation>保存されていない変更</translation>
+    </message>
+    <message>
+        <location filename="../ssmm/main_window.py" line="1621" />
+        <source>You have unsaved changes that will be lost.
+
+Do you want to continue?</source>
+        <translation>保存されていない変更があります。続行すると失われます。
+
+続行しますか?</translation>
     </message>
 </context>
 <context>

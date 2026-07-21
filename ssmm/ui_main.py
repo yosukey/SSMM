@@ -8,6 +8,44 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPainter, QPalette
 
 from ssmm import config
+from ssmm import app_settings
+
+# Per-theme, opaque row-selection colors for the slide table. qdarktheme leaves
+# QTableView::item:selected empty, so plain item cells fall back to the style's
+# solid highlight while widget-hosting cells only pick up a faint tint. That
+# mismatch makes part of a selected row look harshly emphasized. Using an opaque
+# background (blended from qdarktheme's own selection color over the table
+# background) replaces the solid highlight so every cell shows the same gentle
+# tint.
+_SLIDE_SELECTION_COLORS = {
+    "light": {"active": "#c1d9f9", "inactive": "#e6f0fc", "text": "#4d5157"},
+    "dark":  {"active": "#1f3454", "inactive": "#161e2d", "text": "#e4e7eb"},
+}
+
+
+# Theme-independent portion of the slide table's stylesheet. Kept as a module
+# constant so the full stylesheet can be rebuilt when the theme changes at runtime.
+SLIDE_TABLE_BASE_STYLE = (
+    "QTableWidget::item { padding: 0px; }"
+    "QTableWidget QComboBox, QTableWidget QSpinBox,"
+    " QTableWidget QLineEdit, QTableWidget QPushButton { min-height: 24px; }"
+)
+
+
+def _slide_table_selection_style() -> str:
+    colors = _SLIDE_SELECTION_COLORS.get(
+        app_settings.get_effective_theme(), _SLIDE_SELECTION_COLORS["light"]
+    )
+    return (
+        "QTableWidget::item:selected {"
+        f"background:{colors['active']};color:{colors['text']};}}"
+        "QTableWidget::item:selected:!active {"
+        f"background:{colors['inactive']};color:{colors['text']};}}"
+    )
+
+
+def slide_table_stylesheet() -> str:
+    return SLIDE_TABLE_BASE_STYLE + _slide_table_selection_style()
 
 class ClickableLabel(QLabel):
     clicked = Signal()
@@ -81,6 +119,39 @@ class SlideTableWidget(QTableWidget):
             painter.end()
 
 
+def make_step_badge(number: int) -> QLabel:
+    """A small rounded, numbered badge that replaces the old emoji step markers.
+    Colors come from the app QSS via the 'stepBadge' object name."""
+    badge = QLabel(str(number))
+    badge.setObjectName("stepBadge")
+    badge.setAlignment(Qt.AlignCenter)
+    badge.setFixedSize(22, 22)
+    return badge
+
+
+def make_card():
+    """A framed 'card' container (QFrame#card) with a vertical layout, used to
+    group each workflow step in the left column. Returns (frame, layout)."""
+    frame = QFrame()
+    frame.setObjectName("card")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(13, 12, 13, 13)
+    layout.setSpacing(8)
+    return frame, layout
+
+
+def step_header_row(badge: QLabel, title_label: QLabel, trailing: QWidget | None = None):
+    """Header row for a card: [badge] [title] ...stretch... [optional trailing]."""
+    row = QHBoxLayout()
+    row.setSpacing(9)
+    row.addWidget(badge)
+    row.addWidget(title_label)
+    row.addStretch()
+    if trailing is not None:
+        row.addWidget(trailing)
+    return row
+
+
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         title_version = f"v{MainWindow.__version__}" if MainWindow.__version__ != 'local-dev' else MainWindow.__version__
@@ -94,6 +165,7 @@ class Ui_MainWindow(object):
         MainWindow.project_folder_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
         MainWindow.validation_button = QPushButton(MainWindow.tr("Check Files"))
+        MainWindow.validation_button.setObjectName("secondaryButton")
         MainWindow.validation_button.setEnabled(False)
 
         MainWindow.select_output_button = QPushButton(MainWindow.tr("Browse..."))
@@ -103,11 +175,14 @@ class Ui_MainWindow(object):
         MainWindow.output_folder_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
         MainWindow.preview_button = QPushButton(MainWindow.tr("Create Preview"))
+        MainWindow.preview_button.setObjectName("secondaryButton")
         MainWindow.preview_button.setEnabled(False)
         MainWindow.create_video_button = QPushButton(MainWindow.tr("Create Video"))
+        MainWindow.create_video_button.setObjectName("primaryButton")
         MainWindow.create_video_button.setEnabled(False)
 
         MainWindow.cancel_button = QPushButton(MainWindow.tr("Cancel"))
+        MainWindow.cancel_button.setObjectName("ghostButton")
         MainWindow.cancel_button.setEnabled(False)
 
         MainWindow.parameters_tabs = QTabWidget()
@@ -252,19 +327,26 @@ class Ui_MainWindow(object):
         # Main Controls
         MainWindow.progress_bar = QProgressBar()
         MainWindow.progress_bar.setVisible(True)
-        MainWindow.step1_label = QLabel(MainWindow.tr("1️⃣ Select Project Folder"))
+        # Numbered badges replace the old emoji step markers (1️⃣…); the badge
+        # carries the step number so the label holds only the title.
+        MainWindow.step1_badge = make_step_badge(1)
+        MainWindow.step1_label = QLabel(MainWindow.tr("Select Project Folder"))
         MainWindow.step1_label.setProperty('class', 'stepLabel')
-        MainWindow.step2_label = QLabel(MainWindow.tr("2️⃣ Select Output Folder"))
+        MainWindow.step2_badge = make_step_badge(2)
+        MainWindow.step2_label = QLabel(MainWindow.tr("Select Output Folder"))
         MainWindow.step2_label.setProperty('class', 'stepLabel')
-        MainWindow.step3_label = QLabel(MainWindow.tr("3️⃣ Set Parameters"))
+        MainWindow.step3_badge = make_step_badge(3)
+        MainWindow.step3_label = QLabel(MainWindow.tr("Set Parameters"))
         MainWindow.step3_label.setProperty('class', 'stepLabel')
         MainWindow.reset_parameters_button = QPushButton(MainWindow.tr("Reset Defaults"))
         MainWindow.reset_parameters_button.setObjectName("resetDefaultsButton")
         MainWindow.reset_parameters_button.setToolTip(MainWindow.tr("Reset all parameters below to their default values."))
         MainWindow.reset_parameters_button.setMaximumWidth(120)
-        MainWindow.step4_label = QLabel(MainWindow.tr("4️⃣ Validation"))
+        MainWindow.step4_badge = make_step_badge(4)
+        MainWindow.step4_label = QLabel(MainWindow.tr("Validation"))
         MainWindow.step4_label.setProperty('class', 'stepLabel')
-        MainWindow.step5_label = QLabel(MainWindow.tr("5️⃣ Create Video"))
+        MainWindow.step5_badge = make_step_badge(5)
+        MainWindow.step5_label = QLabel(MainWindow.tr("Create Video"))
         MainWindow.step5_label.setProperty('class', 'stepLabel')
         MainWindow.delete_temp_checkbox = QCheckBox(MainWindow.tr("Delete Temporary Files"))
         MainWindow.delete_temp_checkbox.setChecked(True)
@@ -286,14 +368,10 @@ class Ui_MainWindow(object):
         # Use alternating row bands instead of grid lines to distinguish rows.
         MainWindow.slide_table.setShowGrid(False)
         MainWindow.slide_table.setAlternatingRowColors(True)
-        MainWindow.slide_table.setStyleSheet(
-            "QTableWidget::item { padding: 0px; }"
-            "QTableWidget QComboBox, QTableWidget QSpinBox,"
-            " QTableWidget QLineEdit, QTableWidget QPushButton { min-height: 24px; }"
-        )
+        MainWindow.slide_table.setStyleSheet(slide_table_stylesheet())
         
         slide_settings_layout = QVBoxLayout()
-        MainWindow.total_duration_label = QLabel(MainWindow.tr("Total Duration: 0 sec"))
+        MainWindow.total_duration_label = QLabel(MainWindow.tr("Total Estimated Duration: 0s"))
         # Emphasize the running total using the font API so it survives theme toggles.
         _dur_font = MainWindow.total_duration_label.font()
         _dur_font.setBold(True)
@@ -444,66 +522,67 @@ class Ui_MainWindow(object):
 
 
         # Layouts
-        # -- Left Pane --
+        # -- Left Pane: each numbered step lives in its own framed card. --
         left_layout = QVBoxLayout()
-        project_folder_layout = QHBoxLayout()
-        project_folder_layout.addWidget(MainWindow.step1_label)
-        project_folder_layout.addWidget(MainWindow.select_project_folder_button)
-        left_layout.addLayout(project_folder_layout)
-        left_layout.addWidget(MainWindow.project_folder_label)
+        left_layout.setSpacing(10)
 
-        output_folder_layout = QHBoxLayout()
-        output_folder_layout.addWidget(MainWindow.step2_label)
-        output_folder_layout.addWidget(MainWindow.select_output_button)
-        left_layout.addLayout(output_folder_layout)
-        left_layout.addWidget(MainWindow.output_folder_label)
+        # Step 1: project folder
+        card1, card1_layout = make_card()
+        card1_layout.addLayout(step_header_row(
+            MainWindow.step1_badge, MainWindow.step1_label, MainWindow.select_project_folder_button))
+        card1_layout.addWidget(MainWindow.project_folder_label)
+        left_layout.addWidget(card1)
 
-        step3_layout = QHBoxLayout()
-        step3_layout.addWidget(MainWindow.step3_label)
-        step3_layout.addStretch()
-        step3_layout.addWidget(MainWindow.reset_parameters_button)
-        left_layout.addLayout(step3_layout)
-        left_layout.addWidget(MainWindow.parameters_tabs)
+        # Step 2: output folder
+        card2, card2_layout = make_card()
+        card2_layout.addLayout(step_header_row(
+            MainWindow.step2_badge, MainWindow.step2_label, MainWindow.select_output_button))
+        card2_layout.addWidget(MainWindow.output_folder_label)
+        left_layout.addWidget(card2)
 
-        validation_layout_h = QHBoxLayout()
-        validation_layout_h.addWidget(MainWindow.step4_label)
-        validation_layout_h.addWidget(MainWindow.validation_button)
-        left_layout.addLayout(validation_layout_h)
-        left_layout.addWidget(MainWindow.step5_label)
-        left_layout.addWidget(MainWindow.delete_temp_checkbox)
-        left_layout.addWidget(MainWindow.append_duration_checkbox)
-        
-        # Filename layout (Horizontal)
+        # Step 3: parameters (grows to fill the column)
+        card3, card3_layout = make_card()
+        card3_layout.addLayout(step_header_row(
+            MainWindow.step3_badge, MainWindow.step3_label, MainWindow.reset_parameters_button))
+        card3_layout.addWidget(MainWindow.parameters_tabs)
+        left_layout.addWidget(card3, stretch=1)
+
+        # Step 4: validation
+        card4, card4_layout = make_card()
+        card4_layout.addLayout(step_header_row(
+            MainWindow.step4_badge, MainWindow.step4_label, MainWindow.validation_button))
+        left_layout.addWidget(card4)
+
+        # Step 5: create video
+        card5, card5_layout = make_card()
+        card5_layout.addLayout(step_header_row(MainWindow.step5_badge, MainWindow.step5_label))
+        card5_layout.addWidget(MainWindow.delete_temp_checkbox)
+        card5_layout.addWidget(MainWindow.append_duration_checkbox)
+
         filename_layout = QHBoxLayout()
         filename_layout.addWidget(QLabel(MainWindow.tr("Filename:")))
         filename_layout.addWidget(MainWindow.filename_input)
-        left_layout.addLayout(filename_layout)
+        card5_layout.addLayout(filename_layout)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(MainWindow.preview_button)
         button_layout.addWidget(MainWindow.create_video_button)
         button_layout.addWidget(MainWindow.cancel_button)
-        left_layout.addLayout(button_layout)
-        left_layout.addWidget(MainWindow.progress_bar)
-        
+        card5_layout.addLayout(button_layout)
+        card5_layout.addWidget(MainWindow.progress_bar)
+        left_layout.addWidget(card5)
+
         # -- Right Pane --
         right_layout = QVBoxLayout()
+        # Styled by the app QSS via the 'statusBar' object name; the severity
+        # (info/working/success/error) is set as a dynamic property at runtime.
         MainWindow.status_label = QLabel("")
-        MainWindow.status_label.setObjectName("statusLabel")
-        MainWindow.status_label.setAlignment(Qt.AlignCenter)
+        MainWindow.status_label.setObjectName("statusBar")
+        MainWindow.status_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         MainWindow.status_label.setWordWrap(True)
-        
-        MainWindow.status_label.setStyleSheet("""
-            QLabel#statusLabel {
-                background-color: #d35400;
-                color: white;
-                font-weight: bold;
-                padding: 5px;
-                border-radius: 4px;
-                min-height: 25px;
-            }
-        """)
-        
+        MainWindow.status_label.setProperty("severity", "info")
+        MainWindow.status_label.setMinimumHeight(38)
+
         right_layout.addWidget(MainWindow.status_label)
         right_layout.addWidget(MainWindow.tabs)
 
@@ -513,17 +592,6 @@ class Ui_MainWindow(object):
         main_layout.addLayout(right_layout, stretch=4)
         MainWindow.setLayout(main_layout)
 
-        clickable_and_warning_style = """
-            QLabel#projectFolderLabel, QLabel#outputFolderLabel {
-                color: #448AFF;
-                text-decoration: underline;
-            }
-            QLabel#validationWarningLabel {
-                background-color: #E67E22;
-                color: white;
-                font-weight: bold;
-                padding: 8px;
-                border-radius: 4px;
-            }
-        """
-        MainWindow.setStyleSheet(MainWindow.styleSheet() + clickable_and_warning_style)
+        # The clickable folder-path labels and the validation warning banner are
+        # styled centrally in ssmm/theme.py (build_app_qss) via their object
+        # names, so no per-widget stylesheet is needed here.
