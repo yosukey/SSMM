@@ -47,7 +47,10 @@ class ProjectSetupWorker(QObject):
                     toml_file, project_folder_override=folder_override)
                 if model:
                     self.validator.probe_and_cache_all_materials(model)
-                    if model.slides and not model.slides[0].p_hash:
+                    # Recompute if ANY slide is missing its p-hash/thumbnail, not just
+                    # the first — a partially-populated file would otherwise leave later
+                    # rows without thumbnails and without change-detection hashes.
+                    if model.slides and any(not s.p_hash for s in model.slides):
                          self.validator.compute_and_populate_pdf_details(model)
                 return model
 
@@ -60,7 +63,7 @@ class ProjectSetupWorker(QObject):
                 self.validator.compute_and_populate_pdf_details(model)
                 return model
 
-            if self.path.is_file() and self.path.suffix == '.toml':
+            if self.path.is_file() and self.path.suffix.lower() == '.toml':
                 project_model = setup_from_toml(self.path, None)
             elif self.path.is_file() and self.path.suffix.lower() == '.dmj':
                 project_model = self.settings_manager.import_dougameijin_project(self.path)

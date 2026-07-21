@@ -8,6 +8,24 @@ class UIStateManager:
         self.ui = ui
         self.main_window = main_window
 
+    # Maps each app state to a status-bar severity, which the app QSS turns into
+    # a color (info = neutral, working = accent, success = green, error = red).
+    _WORKING_STATES = frozenset({
+        AppState.CHECKING_ENCODERS, AppState.LOADING_PROJECT,
+        AppState.PROJECT_LOADED_UIPOPULATED, AppState.VALIDATING,
+        AppState.PROCESSING, AppState.CANCELLING,
+    })
+
+    @classmethod
+    def _severity_for_state(cls, state: AppState) -> str:
+        if state == AppState.VALIDATED:
+            return "success"
+        if state == AppState.ERROR:
+            return "error"
+        if state in cls._WORKING_STATES:
+            return "working"
+        return "info"
+
     def update_ui_for_state(self, new_state: AppState):
         all_controls = [
             self.main_window.select_project_folder_button, self.main_window.validation_button, self.main_window.preview_button,
@@ -22,23 +40,25 @@ class UIStateManager:
         ]
         debug_controls = [self.main_window.clear_debug_button, self.main_window.export_debug_button, self.main_window.verbose_debug_checkbox]
 
-        for control in all_controls + debug_controls:
+        for control in all_controls:
             if control: control.setEnabled(False)
+
+        # Debug controls (clear/export log, verbose toggle) stay enabled in every
+        # state, including during long renders and validation, so the user can enable
+        # verbose logging or export the log of a misbehaving run.
+        for control in debug_controls:
+            if control: control.setEnabled(True)
 
         self.main_window.cancel_button.setEnabled(False)
         self.main_window.edit_selection_button.setEnabled(False)
         self.main_window.validation_button.setText(QCoreApplication.translate("MainWindow", "Check Files"))
 
         status_message = ""
-        
+
         is_normalized = self.main_window.normalize_loudness_checkbox.isChecked()
         self.main_window.normalize_loudness_mode_label.setEnabled(is_normalized)
         self.main_window.normalize_loudness_mode_combo.setEnabled(is_normalized)
-        
-        if new_state in [AppState.AWAITING_PROJECT, AppState.PREPARE_TO_VALIDATE, AppState.READY_TO_VALIDATE, AppState.VALIDATED, AppState.ERROR]:
-            for control in debug_controls:
-                control.setEnabled(True)
-        
+
         if new_state == AppState.CHECKING_ENCODERS:
             self.main_window.show_gallery_action.setEnabled(True)
             status_message = QCoreApplication.translate("MainWindow", "Performing initial check of available encoders...")
@@ -120,8 +140,13 @@ class UIStateManager:
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
         
-        self.main_window.status_label.setText(status_message)
-        self.main_window.status_label.setVisible(bool(status_message))
+        status_label = self.main_window.status_label
+        status_label.setProperty("severity", self._severity_for_state(new_state))
+        # Re-polish so the new dynamic property takes effect immediately.
+        status_label.style().unpolish(status_label)
+        status_label.style().polish(status_label)
+        status_label.setText(status_message)
+        status_label.setVisible(bool(status_message))
         self.main_window.validation_warning_label.setVisible(
             self.main_window.has_validated_once and new_state in [AppState.READY_TO_VALIDATE, AppState.PREPARE_TO_VALIDATE]
         )
@@ -133,7 +158,7 @@ class UIStateManager:
             codec_to_set = params.codec
             if self.main_window.codec_combo.findText(codec_to_set) != -1:
                 self.main_window.codec_combo.setCurrentText(codec_to_set)
-            elif self.main_window.codec_combo.count() > 0 and self.main_window.codec_combo.itemText(0) != "Checking...":
+            elif self.main_window.codec_combo.count() > 0 and self.main_window.codec_combo.itemText(0) != "No Encoders Found":
                 self.main_window.codec_combo.setCurrentIndex(0)
                 codec_to_set = self.main_window.codec_combo.currentText()
 
@@ -156,9 +181,14 @@ class UIStateManager:
             self.main_window.pass_combo.setCurrentText(params.encoding_pass)
             self.main_window.audio_bitrate_combo.setCurrentText(params.audio_bitrate)
             self.main_window.audio_sample_rate_combo.setCurrentText(params.audio_sample_rate)
-            self.main_window.audio_channels_combo.setCurrentIndex(
-                self.main_window.audio_channels_combo.findData(params.audio_channels, Qt.UserRole, Qt.MatchExactly)
-            )
+            ch_index = self.main_window.audio_channels_combo.findData(params.audio_channels, Qt.UserRole, Qt.MatchExactly)
+            if ch_index == -1:
+                # An out-of-range value (e.g. from a hand-edited file) has no matching
+                # entry; fall back to the default rather than clearing the combo to an
+                # empty selection (which would store audio_channels=None in the model).
+                ch_index = self.main_window.audio_channels_combo.findData(ProjectParameters().audio_channels, Qt.UserRole, Qt.MatchExactly)
+            if ch_index != -1:
+                self.main_window.audio_channels_combo.setCurrentIndex(ch_index)
             self.main_window.normalize_loudness_checkbox.setChecked(params.normalize_loudness)
             self.main_window.normalize_loudness_mode_combo.setCurrentText(params.normalize_loudness_mode)
             self.main_window.watermark_color_combo.setCurrentText(params.watermark_color)
@@ -172,14 +202,14 @@ class UIStateManager:
             self.main_window.add_watermark_checkbox.setChecked(params.add_watermark)
             self.main_window.watermark_text_input.setText(params.watermark_text)
             self.main_window.watermark_opacity_spin.setValue(params.watermark_opacity)
-            self.main_window.watermark_tile_checkbox.setChecked(params.watermark_tile)
             self.main_window.filename_input.setText(params.filename_input)
             self.main_window.append_duration_checkbox.setChecked(params.append_duration_checkbox)
             self.main_window.delete_temp_checkbox.setChecked(params.delete_temp_checkbox)
             self.main_window.export_youtube_chapters_checkbox.setChecked(params.export_youtube_chapters)
 
-        finally:
-            pass
+        except Exception as e:
+            # A half-synced UI is hard to diagnose silently; surface the failure.
+            self.main_window.write_debug(f"[ERROR] Failed to sync parameters to the UI: {e}")
 
     def update_selection_dependent_ui(self):
         selected_rows = self.main_window.slide_table.selectionModel().selectedRows()
