@@ -19,11 +19,11 @@ if is_pyinstaller_bundle:
 
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtCore import Qt, QTimer
-import qdarktheme
+from PySide6.QtCore import Qt, QTimer, QCoreApplication
 from ssmm.main_window import MainWindow, EmittingStream
 from ssmm.utils import resolve_resource_path, install_translators
 from ssmm import app_settings
+from ssmm import theme as app_theme
 
 MIN_PYTHON_VERSION = (3, 10)
 
@@ -102,8 +102,7 @@ if __name__ == "__main__":
     # Identify the app so QStandardPaths/QSettings resolve to a stable per-app location.
     app.setOrganizationName("SSMM")
     app.setApplicationName("SSMM")
-    theme_arg = app_settings.theme_to_stylesheet_arg(app_settings.get_theme())
-    QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet(theme_arg))
+    app_theme.apply(app, app_settings.get_theme())
     # Install before MainWindow is built so its tr() strings resolve at construction.
     translators = install_translators(app)
 
@@ -123,7 +122,13 @@ if __name__ == "__main__":
                     if not splash_pix.isNull():
                         splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
                         splash.show()
-                        splash.showMessage("Loading application, please wait...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+                        splash.showMessage(
+                            QCoreApplication.translate("main", "Loading application, please wait..."),
+                            Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+                        # Force an immediate paint; the following MainWindow construction
+                        # blocks the event loop, so without this the splash can stay
+                        # unpainted (blank) for the whole startup on some platforms.
+                        app.processEvents()
                 except Exception as e:
                     print(f"Could not create QSplashScreen: {e}")
             else:

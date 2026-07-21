@@ -7,16 +7,17 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QSp
                                QCheckBox, QWidget, QHBoxLayout, QScrollArea, QPushButton,
                                QTableWidget, QTableWidgetItem, QHeaderView, QStyle, QMessageBox,
                                QSlider, QToolButton)
-from PySide6.QtCore import Qt, QPoint, Slot, Signal, QUrl, QSize
+from PySide6.QtCore import Qt, QPoint, Slot, Signal, QUrl, QSize, QThread
 from PySide6.QtGui import (QTextCursor, QPixmap, QImage, QPainter, QFont, QColor, QPen,
                            QPainterPath, QGuiApplication, QIcon, QPalette)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
 from ssmm import config
+from ssmm import theme as app_theme
 from ssmm.models import Slide
 from ssmm.ui_main import wrap_cell_widget
-from ssmm.ui_helpers import generate_waveform_pixmap
+from ssmm.ui_helpers import generate_waveform_png_bytes
 
 COL_NEW_THUMB = 0
 COL_SOURCE_COMBO = 1
@@ -103,7 +104,11 @@ class PageMappingDialog(QDialog):
         super().__init__(parent)
         self.finished.connect(self.deleteLater)
         self.setWindowTitle(self.tr("Map Slide Settings to New PDF Structure"))
-        self.setFixedSize(850, 700)
+        # A fixed 700px height overflows small laptop screens (e.g. 1366x768), clipping
+        # the OK/Cancel row off-screen with no way to reach it. Use a preferred size with
+        # a smaller minimum so the dialog stays resizable and always fits.
+        self.resize(850, 700)
+        self.setMinimumSize(600, 400)
 
         self.old_slides = old_slides
         self.new_pdf_info = new_pdf_info
@@ -182,30 +187,28 @@ class PageMappingDialog(QDialog):
         return pixmaps
 
     def _create_initial_mapping(self) -> dict:
-        mapping = {}
-        used_old_indices = set()
-
         # Pair each parsed hash with its original page index so skipped hashless
         # pages don't renumber the indices used for mapping.
         old_ihashes = [(j, imagehash.hex_to_hash(h)) for j, h in enumerate(self.old_hashes) if h]
         new_ihashes = [(i, imagehash.hex_to_hash(h)) for i, h in enumerate(self.new_hashes) if h]
 
+        # Assign globally by ascending distance rather than greedily in new-page order,
+        # so a later page's exact match is never stolen by an earlier near-match.
+        candidates = []
         for new_idx, new_hash in new_ihashes:
-            best_match_idx = -1
-            min_dist = config.HAMMING_DISTANCE_THRESHOLD + 1
-
             for old_idx, old_hash in old_ihashes:
-                if old_idx in used_old_indices:
-                    continue
-
                 dist = new_hash - old_hash
-                if dist < min_dist:
-                    min_dist = dist
-                    best_match_idx = old_idx
+                if dist <= config.HAMMING_DISTANCE_THRESHOLD:
+                    candidates.append((dist, new_idx, old_idx))
+        candidates.sort(key=lambda c: (c[0], c[1], c[2]))
 
-            if min_dist <= config.HAMMING_DISTANCE_THRESHOLD:
-                mapping[new_idx] = best_match_idx
-                used_old_indices.add(best_match_idx)
+        mapping = {}
+        used_old_indices = set()
+        for dist, new_idx, old_idx in candidates:
+            if new_idx in mapping or old_idx in used_old_indices:
+                continue
+            mapping[new_idx] = old_idx
+            used_old_indices.add(old_idx)
 
         return mapping
 
@@ -435,16 +438,19 @@ class EditSlidesDialog(QDialog):
             numbers_group = QGroupBox(self.tr("Applying to Slides:"))
             numbers_layout = QVBoxLayout(numbers_group)
             
+            # Material-type colors come from the shared design tokens so the
+            # legend matches the slide table and the rest of the app.
             color_map = {
-                "movie": "#1E90FF",
-                "audio": "#228B22",
-                "silent": "#FFA500",
-                "unassigned": "#FFA500"
+                "movie": app_theme.slide_type_color("movie"),
+                "audio": app_theme.slide_type_color("audio"),
+                "silent": app_theme.slide_type_color("silent"),
+                "unassigned": app_theme.slide_type_color("unassigned"),
             }
+            default_color = app_theme.tokens()["text"]
 
             html_parts = []
             for info in slide_info_list:
-                color = color_map.get(info["type"], "#FFFFFF")
+                color = color_map.get(info["type"], default_color)
                 html_parts.append(f'<span style="color:{color};"><b>{info["number"]}</b></span>')
             
             numbers_label = QLabel(", ".join(html_parts))
@@ -509,6 +515,12 @@ class EditSlidesDialog(QDialog):
         self._add_setting_row(pinp_form_layout, "video_effects", self.tr("Video Effects:"), self.effects_button, is_button=True)
         self.selected_effects = []
         self.effects_button.clicked.connect(self._open_effects_dialog)
+        # The effects "value" is invisible until the editor is opened, so ticking the
+        # box without opening it would silently apply an empty list and wipe every
+        # selected slide's effects. Open the editor when the box is ticked and show the
+        # current selection on the button so the value that gets applied is explicit.
+        effects_checkbox, _ = self.widgets["video_effects"]
+        effects_checkbox.toggled.connect(self._on_effects_checkbox_toggled)
 
         pinp_group.setLayout(pinp_form_layout)
         main_layout.addWidget(pinp_group)
@@ -523,10 +535,22 @@ class EditSlidesDialog(QDialog):
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
 
+    def _on_effects_checkbox_toggled(self, checked):
+        if checked:
+            self._open_effects_dialog()
+        self._update_effects_button_label()
+
+    def _update_effects_button_label(self):
+        if self.selected_effects:
+            self.effects_button.setText(self.tr("Edit... ({0} selected)").format(len(self.selected_effects)))
+        else:
+            self.effects_button.setText(self.tr("Edit... (None)"))
+
     def _open_effects_dialog(self):
         dialog = EditEffectsDialog(self.selected_effects, self)
         if dialog.exec() == QDialog.Accepted:
             self.selected_effects = dialog.get_selected_effects()
+            self._update_effects_button_label()
 
     def _add_setting_row(self, layout, key, label_text, widget, items=None, default_value=None, is_button=False):
         if isinstance(widget, QComboBox):
@@ -600,10 +624,19 @@ class WaveformWidget(QWidget):
         super().__init__(parent)
         self._pixmap = pixmap
         self._position_ratio = 0.0
+        # None pixmap means the waveform is still being generated in the background.
+        self._loading = pixmap is None
         self.setMinimumHeight(120)
         self.setCursor(Qt.PointingHandCursor)
         if pixmap and not pixmap.isNull():
             self.setMinimumWidth(min(pixmap.width(), 600))
+
+    def set_waveform(self, pixmap):
+        self._pixmap = pixmap
+        self._loading = False
+        if pixmap and not pixmap.isNull():
+            self.setMinimumWidth(min(pixmap.width(), 600))
+        self.update()
 
     def set_position_ratio(self, ratio: float):
         self._position_ratio = max(0.0, min(1.0, ratio))
@@ -612,17 +645,20 @@ class WaveformWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         rect = self.rect()
-        painter.fillRect(rect, QColor("#1e1e1e"))
+        # A dark media canvas in both themes (like the video area); the playhead
+        # uses the app accent so scrubbing reads as an interactive control.
+        painter.fillRect(rect, QColor(app_theme.MEDIA_BACKDROP))
 
         if self._pixmap and not self._pixmap.isNull():
             scaled = self._pixmap.scaled(rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
             painter.drawPixmap(rect, scaled)
         else:
-            painter.setPen(QPen(QColor("#888888")))
-            painter.drawText(rect, Qt.AlignCenter, self.tr("Waveform not available"))
+            painter.setPen(QPen(QColor(app_theme.MEDIA_MUTED)))
+            message = self.tr("Generating waveform...") if self._loading else self.tr("Waveform not available")
+            painter.drawText(rect, Qt.AlignCenter, message)
 
         playhead_x = int(rect.width() * self._position_ratio)
-        painter.setPen(QPen(QColor("#FF5252"), 2))
+        painter.setPen(QPen(QColor(app_theme.accent()), 2))
         painter.drawLine(playhead_x, 0, playhead_x, rect.height())
         painter.end()
 
@@ -645,6 +681,24 @@ class WaveformWidget(QWidget):
         super().mouseMoveEvent(event)
 
 
+class _WaveformLoader(QThread):
+    # Generates the audio waveform off the GUI thread so opening the player does not
+    # freeze the UI while ffmpeg decodes (up to WAVEFORM_GEN_TIMEOUT_S). It emits raw
+    # PNG bytes (or None); the QPixmap is built on the GUI thread by the receiver,
+    # since QPixmap must not be created off the GUI thread.
+    ready = Signal(object)
+
+    def __init__(self, material_path, width, height, parent=None):
+        super().__init__(parent)
+        self._path = material_path
+        self._width = width
+        self._height = height
+
+    def run(self):
+        png_bytes = generate_waveform_png_bytes(self._path, self._width, self._height)
+        self.ready.emit(png_bytes)
+
+
 class MediaPlayerDialog(QDialog):
     def __init__(self, material_path, is_video, parent=None):
         super().__init__(parent)
@@ -658,15 +712,23 @@ class MediaPlayerDialog(QDialog):
 
         # --- Display area ---
         self._waveform = None
+        self._waveform_loader = None
         if is_video:
             self._video_widget = QVideoWidget(self)
             self._video_widget.setMinimumSize(480, 270)
             layout.addWidget(self._video_widget, stretch=1)
         else:
-            waveform_pixmap = generate_waveform_pixmap(self.material_path, 600, 140)
-            self._waveform = WaveformWidget(waveform_pixmap, self)
+            # Show the widget immediately with a "generating" placeholder and fill in
+            # the waveform when the background loader finishes (see _WaveformLoader).
+            self._waveform = WaveformWidget(None, self)
             self._waveform.seekRequested.connect(self._on_waveform_seek)
             layout.addWidget(self._waveform, stretch=1)
+            # Parent to the (long-lived) window, not this dialog, so the thread outlives
+            # a quick dialog close instead of being destroyed while still running.
+            self._waveform_loader = _WaveformLoader(self.material_path, 600, 140, parent or self)
+            self._waveform_loader.ready.connect(self._on_waveform_ready)
+            self._waveform_loader.finished.connect(self._waveform_loader.deleteLater)
+            self._waveform_loader.start()
 
         # --- Player ---
         self._player = QMediaPlayer(self)
@@ -770,6 +832,18 @@ class MediaPlayerDialog(QDialog):
         duration = self._player.duration()
         if duration > 0:
             self._player.setPosition(int(duration * ratio))
+
+    @Slot(object)
+    def _on_waveform_ready(self, png_bytes):
+        if self._waveform is None:
+            return
+        # Build the QPixmap here on the GUI thread (never in the worker thread).
+        pixmap = None
+        if png_bytes:
+            pm = QPixmap()
+            if pm.loadFromData(png_bytes, "PNG"):
+                pixmap = pm
+        self._waveform.set_waveform(pixmap)
 
     def _toggle_play(self):
         if self._player.playbackState() == QMediaPlayer.PlayingState:

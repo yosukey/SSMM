@@ -2,13 +2,16 @@
 import os
 import platform
 import subprocess
+import threading
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from ssmm import config
 
 class FFmpegInstaller(QThread):
     log_message = Signal(str)
-    finished = Signal(bool, str)
+    # Named install_finished (not 'finished') so it does not shadow QThread.finished,
+    # which callers rely on for thread lifetime management.
+    install_finished = Signal(bool, str)
 
     def _get_windows_winget_path(self) -> Path | None:
         winget_path_str = os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe')
@@ -33,6 +36,21 @@ class FFmpegInstaller(QThread):
                     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                         pass
 
+            if platform.system() == 'Darwin' and name == 'brew':
+                # A frozen .app launched from Finder inherits the minimal launchd PATH
+                # (/usr/bin:/bin:/usr/sbin:/sbin), which omits Homebrew's install dirs,
+                # so `brew` on PATH fails even when it is installed. Probe the standard
+                # Apple-silicon and Intel locations before giving up.
+                for candidate in ('/opt/homebrew/bin/brew', '/usr/local/bin/brew'):
+                    brew_path = Path(candidate)
+                    if brew_path.exists():
+                        try:
+                            subprocess.run([str(brew_path), '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           creationflags=config.SUBPROCESS_CREATION_FLAGS, timeout=10)
+                            return str(brew_path)
+                        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                            pass
+
             return None
 
     def run(self):
@@ -50,7 +68,15 @@ class FFmpegInstaller(QThread):
                     )
                 
                 self.log_message.emit(self.tr("Installing FFmpeg using winget..."))
-                command = [winget_executable, 'install', '-e', '--id', 'Gyan.FFmpeg']
+                # Pin the source and pre-accept the agreements; on a fresh account
+                # winget otherwise prompts on stdout ("Do you agree...? [Y/N]") and,
+                # with no usable stdin, blocks forever behind the modal progress dialog.
+                command = [
+                    winget_executable, 'install', '-e', '--id', 'Gyan.FFmpeg',
+                    '--source', 'winget',
+                    '--accept-source-agreements', '--accept-package-agreements',
+                    '--disable-interactivity',
+                ]
                 self._run_command(command)
 
             elif system == 'Darwin':
@@ -75,10 +101,10 @@ class FFmpegInstaller(QThread):
             else:
                 raise OSError(self.tr("Unsupported OS: {0}").format(system))
 
-            self.finished.emit(True, self.tr("Installation process finished."))
+            self.install_finished.emit(True, self.tr("Installation process finished."))
 
         except Exception as e:
-            self.finished.emit(False, self.tr("An error occurred: {0}").format(e))
+            self.install_finished.emit(False, self.tr("An error occurred: {0}").format(e))
 
     def _run_command(self, command):
         process = subprocess.Popen(
@@ -91,11 +117,30 @@ class FFmpegInstaller(QThread):
             creationflags=config.SUBPROCESS_CREATION_FLAGS
         )
 
-        if process.stdout:
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    self.log_message.emit(line.strip())
+        # Watchdog: an installer that hangs (e.g. waiting on unexpected input) would
+        # otherwise block the readline loop forever behind the modal dialog. Killing it
+        # closes stdout, ending the loop; the timed_out flag then raises below.
+        timed_out = threading.Event()
 
-        process.wait()
+        def _kill_on_timeout():
+            timed_out.set()
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+        watchdog = threading.Timer(config.FFMPEG_INSTALL_TIMEOUT_S, _kill_on_timeout)
+        watchdog.start()
+        try:
+            if process.stdout:
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        self.log_message.emit(line.strip())
+            process.wait()
+        finally:
+            watchdog.cancel()
+
+        if timed_out.is_set():
+            raise subprocess.TimeoutExpired(command, config.FFMPEG_INSTALL_TIMEOUT_S)
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command, self.tr("Process exited with a non-zero status."))

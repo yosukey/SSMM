@@ -19,8 +19,10 @@ MAX_RECENT = 5
 
 WINDOW_GEOMETRY_KEY = "window/geometry"
 
+# Only the output folder remembers its last location; project selection always
+# starts from the Desktop.
 LAST_DIR_KEY = "paths/last_dir"
-VALID_DIR_KINDS = ("project", "output")
+VALID_DIR_KINDS = ("output",)
 
 
 def _settings_path() -> str:
@@ -80,6 +82,20 @@ def set_theme(code: str) -> None:
 def theme_to_stylesheet_arg(code: str) -> str:
     # qdarktheme uses "auto" to follow the OS appearance.
     return {"light": "light", "dark": "dark"}.get(code, "auto")
+
+
+def get_effective_theme() -> str:
+    # Resolve the stored preference to a concrete "light"/"dark" so callers that
+    # need actual colors (not qdarktheme's "auto") can pick the right palette.
+    theme = get_theme()
+    if theme in ("light", "dark"):
+        return theme
+    # "system": mirror how qdarktheme's "auto" decides, via the same detector.
+    try:
+        import darkdetect
+        return "dark" if darkdetect.isDark() else "light"
+    except Exception:
+        return "light"
 
 
 # --- Recent projects --------------------------------------------------------

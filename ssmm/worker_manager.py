@@ -27,14 +27,13 @@ class WorkerManager(QObject):
     
     _start_video_creation_signal = Signal(ProjectModel, bool)
     _start_preview_creation_signal = Signal(ProjectModel, int, Path, bool, bool)
-    _cancel_transient_worker_signal = Signal()
 
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_transient_thread = None
         self.current_transient_worker = None
-        
+
         self.video_processor = None
         self.video_thread = None
 
@@ -72,46 +71,53 @@ class WorkerManager(QObject):
                 thread.terminate()
                 thread.wait()
 
+    def is_transient_busy(self) -> bool:
+        # True while a transient worker (project setup, validation, encoder test) is
+        # still running. Callers must check this before changing app state for a new
+        # transient task, since _start_transient_worker silently drops a second one.
+        return bool(self.current_transient_thread and self.current_transient_thread.isRunning())
+
     def _start_transient_worker(self, worker_class, worker_args: tuple, signals_to_slots: dict):
-        if self.current_transient_thread and self.current_transient_thread.isRunning():
-            self.transient_worker_busy.emit("A process is already running. Please wait for it to complete.")
+        if self.is_transient_busy():
+            self.transient_worker_busy.emit(
+                self.tr("A process is already running. Please wait for it to complete."))
             return
 
-        self.current_transient_thread = QThread()
-        self.current_transient_worker = worker_class(*worker_args)
-        self.current_transient_worker.moveToThread(self.current_transient_thread)
-        
-        if hasattr(self.current_transient_worker, 'cancel'):
-            self._cancel_transient_worker_signal.connect(self.current_transient_worker.cancel)
+        thread = QThread()
+        worker = worker_class(*worker_args)
+        worker.moveToThread(thread)
+        self.current_transient_thread = thread
+        self.current_transient_worker = worker
 
         terminal_signal_names = [
-            'finished', 'error', 'canceled', 'validation_finished', 
-            'validation_error', 'validation_canceled', 'project_setup_finished', 
+            'finished', 'error', 'canceled', 'validation_finished',
+            'validation_error', 'validation_canceled', 'project_setup_finished',
             'project_setup_error', 'encoder_test_finished'
         ]
 
         for signal_name, slot_or_signal in signals_to_slots.items():
-            signal = getattr(self.current_transient_worker, signal_name)
+            signal = getattr(worker, signal_name)
             signal.connect(slot_or_signal)
-            
+
             if signal_name in terminal_signal_names:
-                signal.connect(self.current_transient_thread.quit)
+                signal.connect(thread.quit)
 
-        self.current_transient_thread.started.connect(self.current_transient_worker.run)
-        self.current_transient_thread.finished.connect(self.current_transient_worker.deleteLater)
-        self.current_transient_thread.finished.connect(self.current_transient_thread.deleteLater)
-        self.current_transient_thread.finished.connect(self._clear_transient_references)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        # Capture this specific thread so a newer transient worker started before
+        # this queued slot runs is not clobbered (see _clear_transient_references).
+        thread.finished.connect(lambda t=thread: self._clear_transient_references(t))
 
-        self.current_transient_thread.start()
+        thread.start()
 
-    def _clear_transient_references(self):
-        # Runs on QThread.finished, when the worker's C++ object may already be deleted.
-        # Disconnect the cancel relay rather than referencing the worker directly.
-        try:
-            self._cancel_transient_worker_signal.disconnect()
-        except (TypeError, RuntimeError):
-            # Raised when nothing is connected or the connection is already torn down.
-            pass
+    def _clear_transient_references(self, finished_thread=None):
+        # Runs on QThread.finished (queued to this thread). By the time it runs a
+        # newer transient worker may already own current_transient_thread/worker; in
+        # that case leave the newer references untouched so the new task stays
+        # cancelable and tracked.
+        if finished_thread is not None and finished_thread is not self.current_transient_thread:
+            return
 
         self.current_transient_thread = None
         self.current_transient_worker = None
@@ -154,8 +160,13 @@ class WorkerManager(QObject):
         self._start_preview_creation_signal.emit(model, index, path, is_verbose, include_intervals)
 
     def cancel_all_tasks(self):
-        if self.current_transient_worker and hasattr(self.current_transient_worker, 'cancel'):
-            self._cancel_transient_worker_signal.emit()
-        
+        worker = self.current_transient_worker
+        if worker is not None and hasattr(worker, 'cancel'):
+            # The worker thread's event loop is blocked inside run() for the whole
+            # task, so a queued signal to cancel() would only be delivered after the
+            # work already finished. cancel() merely flips a thread-safe flag, so
+            # call it directly from the GUI thread (mirrors VideoProcessor.cancel()).
+            worker.cancel()
+
         if self.video_processor:
             self.video_processor.cancel()
