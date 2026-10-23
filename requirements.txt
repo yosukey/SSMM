@@ -3,6 +3,8 @@ pypdfium2
 pillow>=9.2.0
 toml
 pyqtdarktheme>=2.1.0
+# Imported directly for the "System Default" theme (also a dependency of pyqtdarktheme).
+darkdetect
 psutil
 imagehash
 numpy
