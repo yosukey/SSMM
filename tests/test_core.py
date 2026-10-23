@@ -513,3 +513,22 @@ def test_validation_request_while_previous_task_unwinds_keeps_state(qapp, monkey
     finally:
         window._dirty = False
         window.close()
+
+
+def test_signal_emit_keeps_bool_refcount(qapp):
+    # Some PySide6 releases (6.12.0) drop a reference to True on every emit(); before
+    # Python 3.12 that aborts the process (e.g. during a render, which emits per log line).
+    import gc
+    import sys
+    from PySide6.QtCore import QObject, Signal
+
+    class Emitter(QObject):
+        fired = Signal(str)
+
+    emitter = Emitter()
+    gc.collect()
+    before = sys.getrefcount(True)
+    for _ in range(50):
+        emitter.fired.emit("x")
+    gc.collect()
+    assert sys.getrefcount(True) >= before - 5
