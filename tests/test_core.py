@@ -362,3 +362,71 @@ def test_waveform_job_delivers_png_and_can_be_cancelled(tmp_path, qapp):
     slow.cancel()
     QTest.qWait(300)
     assert slow._process is not None and slow._process.poll() is not None
+
+
+def _count_streams(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-show_entries",
+                          "stream=codec_type,nb_read_packets,duration", "-of", "json", str(path)],
+                         capture_output=True, text=True).stdout
+    import json
+    return {s["codec_type"]: s for s in json.loads(out)["streams"]}
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+@pytest.mark.parametrize("fps", [3, 5, 30])
+def test_transition_interval_keeps_audio_at_low_frame_rates(tmp_path, fps):
+    # With xfade and acrossfade in one graph FFmpeg dropped the audio stream at 3-5 fps.
+    from types import SimpleNamespace
+    for name, color in (("a.png", "red"), ("b.png", "blue")):
+        Image.new("RGB", (160, 90), color).save(tmp_path / name)
+    vp = VideoProcessor()
+    model = SimpleNamespace(parameters=ProjectParameters(resolution="160x90", fps=fps))
+    slide = Slide(interval_to_next=1, transition_to_next="Fade")
+    out = vp._build_interval(model, tmp_path / "a.png", tmp_path / "b.png", slide, tmp_path, "libx264", "t",
+                             apply_watermark=False)
+    streams = _count_streams(out)
+    assert int(streams["video"]["nb_read_packets"]) == fps
+    assert "audio" in streams and float(streams["audio"]["duration"]) == pytest.approx(1.0, abs=0.01)
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+def test_pinp_segment_has_exact_frame_count(tmp_path):
+    # A 0.92 s 50 fps clip at 60 fps output must give ceil(0.92*60) = 56 frames; the
+    # background still looping at the image2 default of 25 fps cut it to 55.
+    from types import SimpleNamespace
+    video = tmp_path / "v.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x120:r=50:d=0.92",
+                    "-f", "lavfi", "-i", "sine=d=0.45", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)], check=True)
+    Image.new("RGB", (160, 90), "gray").save(tmp_path / "page.png")
+    slide = Slide(filename="v.mp4")
+    ProjectValidator().analyze_material(video, slide)
+    vp = VideoProcessor()
+    model = SimpleNamespace(parameters=ProjectParameters(resolution="160x90", fps=60))
+    out = tmp_path / "seg.mov"
+    vp._overlay_video_on_image(model, tmp_path / "page.png", video, out, "libx264", slide)
+    streams = _count_streams(out)
+    assert int(streams["video"]["nb_read_packets"]) == 56
+    assert float(streams["audio"]["duration"]) == pytest.approx(56 / 60, abs=0.01)
+
+
+def test_malformed_settings_file_loads_with_defaults(tmp_path, qapp):
+    from types import SimpleNamespace
+    _make_pdf(tmp_path / "deck.pdf", pages=2)
+    (tmp_path / "settings.toml").write_text(
+        'slides = [ { material = [1, 2], transition_to_next = ["Fade"], p_hash = 5, '
+        'video_position = { a = 1 }, video_effects = [ { x = 1 }, "Circle" ] }, "not a table" ]\n'
+        '[paths]\nproject_folder_is_self = true\noutput_folder = 42\n'
+        '[parameters]\nresolution = [1920, 1080]\nhardware_encoding = { gpu = "x" }\nencoding_mode = ["VBR"]\n'
+        'fps = 30.0\nwatermark_text = 7\n',
+        encoding="utf-8")
+    manager = SettingsManager(main_window=SimpleNamespace(validator=ProjectValidator(), __version__="t"))
+    model = manager.load_from_file(tmp_path / "settings.toml")
+    defaults = ProjectParameters()
+    assert model.output_folder is None
+    assert model.parameters.resolution == defaults.resolution
+    assert model.parameters.hardware_encoding is None
+    assert model.parameters.encoding_mode == defaults.encoding_mode
+    assert model.parameters.fps == 30 and model.parameters.watermark_text == ""
+    assert len(model.slides) == 2
+    assert model.slides[0].filename is None and model.slides[0].transition_to_next == "None"
+    assert model.slides[0].p_hash is None

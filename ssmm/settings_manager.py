@@ -5,7 +5,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QStandardPaths, QObject, Signal
 import hashlib
-from dataclasses import asdict
+from dataclasses import asdict, fields
+import re
 
 from ssmm.models import ProjectModel, ProjectParameters, Slide
 from ssmm import config
@@ -128,13 +129,21 @@ class SettingsManager(QObject):
         except (toml.TomlDecodeError, UnicodeDecodeError) as e:
             raise SettingsFileParseError(f"The settings file '{file_path.name}' is not a valid TOML file or is corrupt: {e}")
 
-        validation_info = data.get("validation_info", {})
+        # Hand-edited files may give any section or value the wrong shape; treat a
+        # malformed section as absent instead of failing the whole load.
+        def section(name, kind):
+            value = data.get(name)
+            return value if isinstance(value, kind) else kind()
+
+        validation_info = section("validation_info", dict)
         cached_pdf_hash = validation_info.get("pdf_file_hash")
+        if not isinstance(cached_pdf_hash, str):
+            cached_pdf_hash = None
         if cached_pdf_hash:
             self.main_window.validator.validated_pdf_hash = cached_pdf_hash
             self.log_message.emit(f"[INFO] Loaded cached PDF hash: {cached_pdf_hash[:10]}...", 'app')
 
-        loaded_params_dict = data.get("parameters", {})
+        loaded_params_dict = section("parameters", dict)
 
         stored_hash = loaded_params_dict.get('integrity_hash')
         if stored_hash:
@@ -145,13 +154,15 @@ class SettingsManager(QObject):
             except Exception as e:
                 self.log_message.emit(f"[WARNING] Could not verify settings file integrity: {e}", 'app')
 
-        paths = data.get("paths", {})
+        paths = section("paths", dict)
         if project_folder_override is not None:
             project_dir = Path(project_folder_override)
             if not project_dir.is_dir():
                 raise FileNotFoundError(f"Project folder '{project_dir}' could not be found.")
         else:
-            project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") else paths.get("project_folder")
+            project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") is True else paths.get("project_folder")
+            if not isinstance(project_path_str, str):
+                project_path_str = None
             if not project_path_str or not Path(project_path_str).is_dir():
                  raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
             project_dir = Path(project_path_str)
@@ -163,7 +174,8 @@ class SettingsManager(QObject):
 
         pdf_path = pdf_files[0]
 
-        toml_slide_count = len(data.get("slides", []))
+        loaded_slides_settings = [sl if isinstance(sl, dict) else {} for sl in section("slides", list)]
+        toml_slide_count = len(loaded_slides_settings)
 
         try:
             pdf_page_count = pdf_utils.page_count(pdf_path)
@@ -177,7 +189,7 @@ class SettingsManager(QObject):
         project_model.project_folder = project_dir
 
         output_path_str = paths.get("output_folder")
-        if output_path_str and Path(output_path_str).is_dir():
+        if isinstance(output_path_str, str) and output_path_str and Path(output_path_str).is_dir():
             project_model.output_folder = Path(output_path_str)
 
         project_model.parameters = ProjectParameters()
@@ -186,7 +198,6 @@ class SettingsManager(QObject):
                 setattr(project_model.parameters, key, value)
         self._coerce_and_validate_parameters(project_model.parameters)
 
-        loaded_slides_settings = data.get("slides", [])
         
         project_model.slides = [Slide() for _ in range(toml_slide_count)]
         
@@ -198,6 +209,8 @@ class SettingsManager(QObject):
 
             slide = project_model.slides[idx]
             material = slide_settings.get("material")
+            if not isinstance(material, str):
+                material = None
 
             if material == config.SILENT_MATERIAL_NAME:
                 slide.filename = config.SILENT_MATERIAL_NAME
@@ -225,17 +238,20 @@ class SettingsManager(QObject):
             slide.interval_to_next = _clamped_int(slide_settings.get("interval_to_next", config.DEFAULT_SLIDE_INTERVAL),
                                                   iv_low, iv_high, config.DEFAULT_SLIDE_INTERVAL)
             transition = slide_settings.get("transition_to_next", "None")
-            slide.transition_to_next = transition if transition in config.TRANSITION_MAPPINGS else "None"
+            slide.transition_to_next = transition if isinstance(transition, str) and transition in config.TRANSITION_MAPPINGS else "None"
             # Provisional; probing the material replaces this with the stream-based result.
             slide.is_video = slide.filename is not None and slide.filename.lower().endswith(config.SUPPORTED_VIDEO_FORMATS)
             slide.selected_audio_stream_index = _clamped_int(slide_settings.get("selected_audio_stream_index", 0), 0, 1 << 16, 0)
             
-            slide.p_hash = slide_settings.get("p_hash")
-            slide.thumbnail_b64 = slide_settings.get("thumbnail_b64")
+            # Invalid cached values are dropped; they are recomputed from the PDF.
+            p_hash = slide_settings.get("p_hash")
+            slide.p_hash = p_hash if isinstance(p_hash, str) and re.fullmatch(r"[0-9a-fA-F]+", p_hash) else None
+            thumbnail = slide_settings.get("thumbnail_b64")
+            slide.thumbnail_b64 = thumbnail if isinstance(thumbnail, str) and thumbnail else None
 
             if slide.is_video:
                 position = slide_settings.get("video_position", "Center")
-                slide.video_position = position if position in config.VIDEO_POSITION_MAP else "Center"
+                slide.video_position = position if isinstance(position, str) and position in config.VIDEO_POSITION_MAP else "Center"
                 # Clamp the PinP scale to its valid range and drop any effect tokens
                 # that are not recognized, so a hand-edited file cannot inject values
                 # the UI and renderer do not understand.
@@ -246,7 +262,7 @@ class SettingsManager(QObject):
                     slide.video_scale = config.DEFAULT_VIDEO_SCALE
                 raw_effects = slide_settings.get("video_effects", [])
                 if isinstance(raw_effects, list):
-                    slide.video_effects = [e for e in raw_effects if e in config.VIDEO_EFFECT_MAP]
+                    slide.video_effects = [e for e in raw_effects if isinstance(e, str) and e in config.VIDEO_EFFECT_MAP and e != "None"]
                 else:
                     slide.video_effects = []
 
@@ -277,6 +293,13 @@ class SettingsManager(QObject):
                 f"[WARNING] Loaded setting '{field_name}'={getattr(params, field_name)!r} is invalid "
                 f"({reason}); reset to default {default_value!r}.", 'app')
             setattr(params, field_name, default_value)
+
+        # Every parameter is a single scalar (or None); a list/table in its place
+        # cannot be interpreted and would break the lookups below.
+        for f in fields(params):
+            value = getattr(params, f.name)
+            if f.name != 'available_encoders' and value is not None and not isinstance(value, (str, int, float, bool)):
+                reset(f.name, 'not a single value')
 
         # Older files stored option labels; convert them to the keys used now.
         for field_name, options in _KEYED_OPTION_FIELDS.items():

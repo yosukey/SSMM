@@ -687,7 +687,9 @@ class VideoProcessor(QObject):
         width, height = map(int, params.resolution.split('x'))
 
         builder = self._create_ffmpeg_builder()
-        builder.add_input(image, ['-loop', '1'])
+        # Loop the still at the output frame rate (the image2 default is 25 fps), so
+        # its frames lie on the output grid and '-t' yields exactly the quantized count.
+        builder.add_input(image, ['-framerate', str(fps), '-loop', '1'])
 
         filter_chains = [f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2[v_scaled]"]
         final_video_stream = "[v_scaled]"
@@ -791,7 +793,9 @@ class VideoProcessor(QObject):
 
         builder = self._create_ffmpeg_builder()
         quantized_duration = quantize_duration(slide.duration, fps)
-        builder.add_input(image, ['-loop', '1', '-t', str(quantized_duration)])
+        # The background still runs at the output frame rate; at the image2 default of
+        # 25 fps its last frame can end before the segment (e.g. 55 of 56 frames at 60 fps).
+        builder.add_input(image, ['-framerate', str(fps), '-loop', '1', '-t', str(quantized_duration)])
         # CFR is enforced by the output '-r' below.
         builder.add_input(video, ['-noautorotate'])
 
@@ -869,13 +873,18 @@ class VideoProcessor(QObject):
             clips = self._still_clips_from_frames(
                 model, [(prev_frame, interval_duration), (next_frame, interval_duration)],
                 codec, temp_dir, suffix, apply_watermark)
-            filter_complex = (f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={interval_duration}:offset=0[v];"
-                              f"[0:a][1:a]acrossfade=d={interval_duration}:curve1=tri:curve2=tri[a]")
+            # The interval's audio is silence on both sides, so instead of crossfading
+            # the two silent tracks a fresh silent source is used. (With xfade and
+            # acrossfade in one graph, FFmpeg drops the audio stream entirely at very
+            # low frame rates such as 3-5 fps.)
+            filter_complex = f"[0:v][1:v]xfade=transition={ffmpeg_keyword}:duration={interval_duration}:offset=0[v]"
             video_opts = self._get_video_encoding_options(model.parameters, pass_num=1, is_single_pass_override=True)
-            outputs = (['-map', '[v]', '-map', '[a]', '-c:v', codec] + video_opts
-                       + self._get_intermediate_audio_options(model.parameters) + ['-r', str(fps)])
+            outputs = (['-map', '[v]', '-map', '2:a', '-c:v', codec] + video_opts
+                       + self._get_intermediate_audio_options(model.parameters)
+                       + ['-t', str(interval_duration), '-r', str(fps)])
             builder = self._create_ffmpeg_builder()
             builder.add_input(clips[0]).add_input(clips[1])
+            builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(interval_duration)])
             builder.set_filter_complex(filter_complex)
             builder.set_output(output_path, outputs)
             self._run_subprocess(builder.build())
@@ -897,7 +906,7 @@ class VideoProcessor(QObject):
             clip_path = self._segment_path(temp_dir, f"still_{suffix}_{n}")
             quantized_duration = quantize_duration(clip_duration, fps)
             builder = self._create_ffmpeg_builder()
-            builder.add_input(frame_path, ['-loop', '1'])
+            builder.add_input(frame_path, ['-framerate', str(fps), '-loop', '1'])
             builder.add_input(config.SILENT_AUDIO_SOURCE, ['-f', 'lavfi', '-t', str(quantized_duration)])
 
             filter_chains = [f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2[v_scaled]"]
