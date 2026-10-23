@@ -153,9 +153,17 @@ class UIStateManager:
             if self.main_window.codec_combo.findText(codec_to_set) != -1:
                 self.main_window.codec_combo.setCurrentText(codec_to_set)
             elif self.main_window.codec_combo.count() > 0 and self.main_window.codec_combo.itemText(0) != "No Encoders Found":
-                self.main_window.codec_combo.setCurrentIndex(0)
+                # The stored codec has no working encoder on this machine: fall back to
+                # the default codec if available (not simply the first, alphabetical
+                # entry, which is the slow AV1) and say so in the log.
+                default_codec = ProjectParameters().codec
+                if self.main_window.codec_combo.findText(default_codec) != -1:
+                    self.main_window.codec_combo.setCurrentText(default_codec)
+                else:
+                    self.main_window.codec_combo.setCurrentIndex(0)
                 codec_to_set = self.main_window.codec_combo.currentText()
-                # The stored codec has no working encoder on this machine.
+                self.main_window.write_debug(
+                    f"[WARNING] Codec '{params.codec}' has no working encoder on this computer; using '{codec_to_set}'.")
                 params.codec = codec_to_set
 
             self.main_window.update_hardware_encoding_options(codec_to_set)

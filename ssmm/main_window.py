@@ -767,7 +767,8 @@ class MainWindow(QWidget):
             self.normalize_loudness_mode_combo,
         ]
         param_widgets_on_finish_editing = [self.filename_input]
-        param_widgets_on_toggle = [self.normalize_loudness_checkbox]
+        # The YouTube export adds chapter rules to the validation, so it invalidates it.
+        param_widgets_on_toggle = [self.normalize_loudness_checkbox, self.export_youtube_chapters_checkbox]
 
         for widget in param_widgets_on_change:
             widget.currentIndexChanged.connect(self.on_parameter_changed)
@@ -791,7 +792,6 @@ class MainWindow(QWidget):
         cosmetic_widgets_on_toggle = [
             self.add_watermark_checkbox, self.watermark_tile_checkbox,
             self.delete_temp_checkbox, self.append_duration_checkbox,
-            self.export_youtube_chapters_checkbox,
         ]
 
         for widget in cosmetic_widgets_on_change:
@@ -1069,8 +1069,11 @@ class MainWindow(QWidget):
         # Single entry point for all project loads (folder, .toml, .dmj). Not while a
         # render, validation or another load is running: the running task belongs to
         # the current project (and the Open Recent menu is reachable at any time).
+        # (CHECKING_ENCODERS is not listed: the command-line project is loaded right
+        # after the encoder test, before the state leaves it; a test that is still
+        # running is caught by is_transient_busy() below.)
         if self.state_machine.state in (AppState.PROCESSING, AppState.CANCELLING, AppState.VALIDATING,
-                                        AppState.LOADING_PROJECT, AppState.CHECKING_ENCODERS):
+                                        AppState.LOADING_PROJECT):
             QMessageBox.information(self, self.tr("Please Wait"),
                                     self.tr("A background task is still running. Please wait a moment and try again."))
             return
@@ -1090,6 +1093,7 @@ class MainWindow(QWidget):
         self.cosmetic_update_timer.stop()
         # The path is remembered so it can be added to the recent list on success.
         self._pending_recent_path = path
+        self._had_project_before_load = self.project_model.project_folder is not None
         self.validator.clear_cache()
         self.state_machine.transition_to(AppState.LOADING_PROJECT)
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1142,17 +1146,8 @@ class MainWindow(QWidget):
         # Record the successfully loaded project in the recent list. A DougaMeijin
         # import is recorded as the extracted project folder: re-opening the .dmj
         # would extract yet another copy of it.
-        if self._pending_recent_path:
-            recent_path = self._pending_recent_path
-            if recent_path.suffix.lower() == '.dmj' and self.project_model.project_folder:
-                recent_path = self.project_model.project_folder
-                # Write the imported settings next to the extracted files, so that
-                # reopening the folder (e.g. from the recent list) restores them
-                # instead of rebuilding a blank project from the PDF.
-                self.settings_manager._perform_save(recent_path / "settings.toml", self.project_model, notify=False)
-            app_settings.add_recent_project(str(recent_path))
-            self._pending_recent_path = None
-            self._rebuild_recent_menu()
+        # (The recent-list entry is recorded in on_state_changed, once the PDF check
+        # has accepted the project.)
 
         # A freshly loaded project matches its saved state; start clean.
         self._clear_dirty()
@@ -1161,9 +1156,17 @@ class MainWindow(QWidget):
 
     def on_project_setup_error(self, title, message):
         self.write_debug(f"[ERROR] {title}: {message}")
-        QMessageBox.critical(self, title, message)
-        self.state_machine.transition_to(AppState.AWAITING_PROJECT)
         QApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, self.tr("Load Error"),
+                             self.tr("The project could not be loaded.\n\n{0}").format(message))
+        self._pending_recent_path = None
+        if getattr(self, '_had_project_before_load', False) and self.project_model.project_folder:
+            # The failed load did not replace the current project; keep it usable.
+            # Its caches were cleared when the load started, so it needs re-validation.
+            self.state_machine.transition_to(
+                AppState.READY_TO_VALIDATE if self.project_model.output_folder else AppState.PREPARE_TO_VALIDATE)
+        else:
+            self.state_machine.transition_to(AppState.AWAITING_PROJECT)
 
     def on_state_changed(self,  old_state: AppState, new_state: AppState):
         self.ui_manager.update_ui_for_state(new_state)
@@ -1172,7 +1175,13 @@ class MainWindow(QWidget):
             QApplication.restoreOverrideCursor()
 
             can_proceed = self._check_and_handle_pdf_changes()
-            
+
+            if can_proceed:
+                self._record_recent_project()
+            else:
+                # A load the user cancelled (or that failed the PDF check) is not recent.
+                self._pending_recent_path = None
+
             if can_proceed:
                 if self.project_model.output_folder:
                     self.state_machine.transition_to(AppState.READY_TO_VALIDATE)
@@ -1182,6 +1191,20 @@ class MainWindow(QWidget):
                 self._clear_project()
                 if self.state_machine.state == AppState.PROJECT_LOADED_UIPOPULATED:
                      self.state_machine.transition_to(AppState.AWAITING_PROJECT)
+
+    def _record_recent_project(self):
+        if not self._pending_recent_path:
+            return
+        recent_path = self._pending_recent_path
+        self._pending_recent_path = None
+        if recent_path.suffix.lower() == '.dmj' and self.project_model.project_folder:
+            recent_path = self.project_model.project_folder
+            # Write the imported settings next to the extracted files, so that
+            # reopening the folder (e.g. from the recent list) restores them
+            # instead of rebuilding a blank project from the PDF.
+            self.settings_manager._perform_save(recent_path / "settings.toml", self.project_model, notify=False)
+        app_settings.add_recent_project(str(recent_path))
+        self._rebuild_recent_menu()
 
     def save_settings(self):
         if self.state_machine.state != AppState.VALIDATED:
@@ -1282,6 +1305,14 @@ class MainWindow(QWidget):
             QMessageBox.information(self, self.tr("No Updates Found"), self.tr("You are currently running the latest version ({0}).").format(self.__version__))
 
     def run_validation(self):
+        # The previous transient task can still be unwinding for a moment after its
+        # result has arrived (its thread has not finished yet). start_validation would
+        # drop the request and leave the state machine stranded in VALIDATING, so
+        # bail out before touching any state; the user can simply retry.
+        if self.worker_manager.is_transient_busy():
+            self.on_transient_worker_busy(
+                self.tr("A background task is still running. Please wait a moment and try again."))
+            return
         if not self._check_and_handle_pdf_changes():
             return
 
@@ -1601,6 +1632,7 @@ class MainWindow(QWidget):
         self.gallery_window.activateWindow()
 
     def closeEvent(self, event):
+        self._commit_active_editor()
         if self.gallery_window:
             self.gallery_window.close()
 
@@ -1664,9 +1696,18 @@ class MainWindow(QWidget):
     def _clear_dirty(self):
         self._dirty = False
 
+    def _commit_active_editor(self):
+        # A text cell that still has focus (e.g. a chapter title being typed) only
+        # reaches the model on editingFinished; take focus away so it commits first.
+        focus = QApplication.focusWidget()
+        if focus is not None and self.isAncestorOf(focus):
+            focus.clearFocus()
+        self._flush_pending_edits()
+
     def _confirm_discard_changes(self) -> bool:
         # Returns True when it is safe to proceed (no unsaved edits, or the user
         # accepts losing them). Used before loading another project or exiting.
+        self._commit_active_editor()
         if not self._dirty:
             return True
         reply = QMessageBox.question(
@@ -1945,13 +1986,19 @@ class MainWindow(QWidget):
             page_count = pdf_utils.page_count(pdf_path)
             self.project_model.slides = [Slide() for _ in range(page_count)]
             self._rescan_available_materials()
+            # Same as opening the folder as a new project: '[NNN]...' files are assigned.
+            project_init.automap_materials(self.project_model)
 
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
+                self.validator.start_validation()
+                self.validator.probe_and_cache_all_materials(self.project_model)
                 self.validator.compute_and_populate_pdf_details(self.project_model)
                 self.slide_table_manager.populate_slide_table_from_model()
             finally:
                 QApplication.restoreOverrideCursor()
+            # The cached hash belongs to the previous PDF.
+            self.validator.validated_pdf_hash = None
             return True
         except Exception as e:
             QMessageBox.critical(self, self.tr("Error Initializing Project"), self.tr("Could not process the PDF file: {0}").format(e))
@@ -1984,6 +2031,9 @@ class MainWindow(QWidget):
         if dialog.exec() == QDialog.Accepted:
             mapping = dialog.get_mapping()
             self._apply_slide_migration(mapping, old_slides, new_pdf_details)
+            # The cached hash belongs to the previous PDF; the next validation must
+            # analyze the new one instead of reporting an unchanged page structure.
+            self.validator.validated_pdf_hash = None
             QMessageBox.information(self, self.tr("Success"), self.tr("Slide settings have been migrated to the new PDF structure."))
             return True
         else:

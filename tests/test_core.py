@@ -365,6 +365,15 @@ def test_waveform_job_delivers_png_and_can_be_cancelled(tmp_path, qapp):
     assert slow._process is not None and slow._process.wait(timeout=5) is not None
 
 
+def _pump(ms):
+    # Wait in a real event loop. QTest.qWait can keep the GIL held under PySide6,
+    # which starves the app's Python worker threads while the test waits.
+    from PySide6.QtCore import QEventLoop, QTimer
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
 def _count_streams(path):
     out = subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-show_entries",
                           "stream=codec_type,nb_read_packets,duration", "-of", "json", str(path)],
@@ -435,3 +444,72 @@ def test_malformed_settings_file_loads_with_defaults(tmp_path, qapp):
 
     (tmp_path / "settings.toml").write_text('slides = "not a list"\n[paths]\nproject_folder_is_self = true\n', encoding="utf-8")
     assert manager.load_from_file(tmp_path / "settings.toml").slides == []
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+def test_project_path_given_at_startup_is_loaded(tmp_path, qapp, monkeypatch):
+    # The project from the command line is loaded right after the startup encoder
+    # test; a guard against loading "while a task runs" once blocked it for good.
+    from PySide6.QtWidgets import QMessageBox
+    from ssmm import app_settings
+    from ssmm.main_window import MainWindow
+    from ssmm.models import AppState
+    monkeypatch.setattr(app_settings, "_settings_path", lambda: str(tmp_path / "settings.ini"))
+    shown = []
+    for name in ("question", "information", "warning", "critical"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, _n=name, **k: shown.append(_n) or QMessageBox.Yes))
+    project = tmp_path / "proj"
+    project.mkdir()
+    _make_pdf(project / "deck.pdf", pages=2)
+    window = MainWindow(project_path_on_startup=project)
+    window.show()
+    try:
+        for _ in range(600):
+            if window.state_machine.state in (AppState.PREPARE_TO_VALIDATE, AppState.READY_TO_VALIDATE):
+                break
+            _pump(100)
+        assert window.state_machine.state in (AppState.PREPARE_TO_VALIDATE, AppState.READY_TO_VALIDATE), window.state_machine.state
+        assert window.project_model.project_folder == project
+        assert len(window.project_model.slides) == 2
+        assert not shown, shown
+    finally:
+        window._dirty = False
+        window.close()
+
+
+def test_youtube_export_toggle_invalidates_validation(qapp, monkeypatch):
+    # Enabling the export adds chapter rules to the validation, so it must not be
+    # treated as a cosmetic option.
+    from PySide6.QtWidgets import QMessageBox
+    from ssmm.main_window import MainWindow
+    from ssmm.models import AppState
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    window = MainWindow()
+    try:
+        window.project_model.output_folder = Path("/tmp")
+        window.state_machine.transition_to(AppState.VALIDATED)
+        window.export_youtube_chapters_checkbox.setChecked(not window.export_youtube_chapters_checkbox.isChecked())
+        assert window.state_machine.state == AppState.READY_TO_VALIDATE
+    finally:
+        window._dirty = False
+        window.close()
+
+
+def test_validation_request_while_previous_task_unwinds_keeps_state(qapp, monkeypatch):
+    # Right after a result arrives the finished worker thread can still be running for
+    # a moment; a new validation request then must not strand the app in VALIDATING.
+    from PySide6.QtWidgets import QMessageBox
+    from ssmm.main_window import MainWindow
+    from ssmm.models import AppState
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a)))
+    window = MainWindow()
+    try:
+        window.state_machine.transition_to(AppState.READY_TO_VALIDATE)
+        monkeypatch.setattr(window.worker_manager, "is_transient_busy", lambda: True)
+        window.run_validation()
+        assert window.state_machine.state == AppState.READY_TO_VALIDATE
+        assert len(shown) == 1
+    finally:
+        window._dirty = False
+        window.close()

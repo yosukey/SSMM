@@ -104,7 +104,10 @@ class WorkerManager(QObject):
 
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        # The QThread itself is deleted in _clear_transient_references, after wait().
+        # 'finished' is emitted from the thread just before it exits, so a deleteLater
+        # connected to it can free the QThread while it is still running (a crash
+        # when the main thread happens to process the deletion in that window).
         # Capture this specific thread so a newer transient worker started before
         # this queued slot runs is not clobbered (see _clear_transient_references).
         thread.finished.connect(lambda t=thread: self._clear_transient_references(t))
@@ -116,8 +119,11 @@ class WorkerManager(QObject):
         # newer transient worker may already own current_transient_thread/worker; in
         # that case leave the newer references untouched so the new task stays
         # cancelable and tracked.
-        if finished_thread is not None and finished_thread is not self.current_transient_thread:
-            return
+        if finished_thread is not None:
+            finished_thread.wait()  # returns at once: the thread is in its last steps
+            finished_thread.deleteLater()
+            if finished_thread is not self.current_transient_thread:
+                return
 
         self.current_transient_thread = None
         self.current_transient_worker = None

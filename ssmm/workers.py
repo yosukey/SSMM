@@ -94,9 +94,8 @@ class ProjectSetupWorker(QObject):
             self.finished.emit(project_model)
 
         except Exception as e:
-            title = e.__class__.__name__
-            message = f"An error occurred during project setup: {e}"
-            self.error.emit(title, message)
+            # The window shows a translated title; the exception type goes to the log.
+            self.error.emit(e.__class__.__name__, str(e))
         finally:
             self.validator.log = original_logger
             try:
