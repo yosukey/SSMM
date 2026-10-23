@@ -249,8 +249,10 @@ class VideoProcessor(QObject):
             self.watermark_path = None
 
             # Resolve the output directory first; output_folder may be None, and the
-            # path below must use the fallback rather than dereferencing None.
-            output_dir = project_model.output_folder or Path(".")
+            # path below must use the fallback rather than dereferencing None. Make it
+            # absolute: concat lists resolve relative entries against the list's own
+            # folder, and Python < 3.12 keeps mkdtemp() results relative.
+            output_dir = (project_model.output_folder or Path(".")).resolve()
             final_video_path = output_dir / f"{project_model.parameters.filename_input}.mp4"
             # Unique temp name so a second render (or a stale leftover) targeting the
             # same output does not clobber this in-progress file.
@@ -320,7 +322,7 @@ class VideoProcessor(QObject):
             if not base_filename:
                 base_filename = project_model.project_folder.name
 
-            output_dir = project_model.output_folder or Path(".")
+            output_dir = (project_model.output_folder or Path(".")).resolve()
             random_id = uuid.uuid4().hex[:8]
             preview_filename = f"{base_filename}-preview-slide{slide_index+1}-{random_id}.mp4"
             final_preview_path = output_dir / preview_filename
@@ -536,7 +538,8 @@ class VideoProcessor(QObject):
     def _write_concat_list(self, list_path: Path, videos: list[Path]) -> Path:
         with list_path.open('w', encoding='utf-8') as f:
             for video in videos:
-                f.write(f"file '{self._sanitize_path_for_concat(str(video))}'\n")
+                # Absolute paths: relative entries are resolved against the list file's folder.
+                f.write(f"file '{self._sanitize_path_for_concat(str(Path(video).absolute()))}'\n")
         return list_path
 
     def _concatenate_videos(self, slide_videos: list[Path], transition_videos_map: dict, temp_folder: Path) -> Path:

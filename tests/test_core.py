@@ -278,3 +278,15 @@ def test_av1_intermediate_support_check(monkeypatch, qapp):
     messages = ValidationMessages()
     ProjectValidator()._check_intermediate_container_support(ProjectParameters(codec="H.264/MPEG-4 AVC"), messages)
     assert not messages.has_errors()
+
+
+def test_concat_list_uses_absolute_paths(tmp_path, monkeypatch):
+    # The concat demuxer resolves relative entries against the list file's folder,
+    # which doubled the path for a relative output folder on Python < 3.12.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "out").mkdir()
+    vp = VideoProcessor()
+    list_path = vp._write_concat_list(Path("out") / "list.txt", [Path("out") / "a.mov", Path("out") / "it's.mov"])
+    lines = list_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == f"file '{(tmp_path / 'out' / 'a.mov').as_posix()}'"
+    assert lines[1].endswith("/out/it'\\''s.mov'")
