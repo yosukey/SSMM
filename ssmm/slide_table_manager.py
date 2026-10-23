@@ -15,8 +15,8 @@ from ssmm import theme as app_theme
 from ssmm.models import ProjectModel
 from ssmm.validator import ProjectValidator
 from ssmm.media_utils import find_project_pdf
-from ssmm.ui_helpers import (letterbox_pixmap, render_pdf_page_to_pixmap, superimpose_pinp_info,
-                             superimpose_watermark)
+from ssmm.ui_helpers import (fitted_page_width, letterbox_pixmap, render_pdf_page_to_pixmap,
+                             superimpose_pinp_info, superimpose_watermark)
 from ssmm.ui_main import wrap_cell_widget, ClickableLabel, NoWheelComboBox, NoWheelSpinBox
 from ssmm.ui_dialogs import EditEffectsDialog, SlidePreviewDialog, MediaPlayerDialog
 
@@ -123,7 +123,13 @@ class SlideTableManager(QObject):
             output_width, output_height = map(int, self.project_model.parameters.resolution.split('x'))
         except (ValueError, AttributeError):
             output_width, output_height = 1920, 1080
-        target_width = output_width
+        # Render the page at the size it occupies inside the output frame, not at the
+        # full output width (a portrait page would otherwise become huge once padded).
+        thumb = self.thumbnail_cache.get(row_index)
+        if thumb is not None and not thumb.isNull():
+            target_width = fitted_page_width(thumb.width(), thumb.height(), output_width, output_height)
+        else:
+            target_width = output_width
 
         pixmap = render_pdf_page_to_pixmap(pdf_path, row_index, target_width)
         if pixmap is None:

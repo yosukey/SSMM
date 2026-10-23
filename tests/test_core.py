@@ -290,3 +290,75 @@ def test_concat_list_uses_absolute_paths(tmp_path, monkeypatch):
     lines = list_path.read_text(encoding="utf-8").splitlines()
     assert lines[0] == f"file '{(tmp_path / 'out' / 'a.mov').as_posix()}'"
     assert lines[1].endswith("/out/it'\\''s.mov'")
+
+
+def test_option_values_in_the_wrong_form_are_recovered(qapp):
+    manager = SettingsManager(main_window=None)
+    params = ProjectParameters()
+    params.audio_sample_rate = 48000      # number instead of "48000"
+    params.resolution = "1280X720"
+    params.watermark_rotation = 45
+    params.audio_bitrate = "999k"         # genuinely invalid -> default
+    manager._coerce_and_validate_parameters(params)
+    assert params.audio_sample_rate == "48000"
+    assert params.resolution == "1280x720"
+    assert params.watermark_rotation == "45"
+    assert params.audio_bitrate == ProjectParameters().audio_bitrate
+
+
+def test_state_change_keeps_still_enabled_controls_untouched(qapp, monkeypatch):
+    # Disabling and re-enabling the slide table on VALIDATED -> READY_TO_VALIDATE
+    # dropped keyboard focus, so typing "12" into an interval cell stored 1.
+    from PySide6.QtCore import QEvent, QObject
+    from PySide6.QtWidgets import QMessageBox
+    from ssmm.main_window import MainWindow
+    from ssmm.models import AppState
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    window = MainWindow()
+    try:
+        window.ui_manager.update_ui_for_state(AppState.VALIDATED)
+
+        class Counter(QObject):
+            changes = 0
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.EnabledChange:
+                    Counter.changes += 1
+                return False
+
+        counter = Counter()
+        window.slide_table.installEventFilter(counter)
+        window.ui_manager.update_ui_for_state(AppState.READY_TO_VALIDATE)
+        assert window.slide_table.isEnabled()
+        assert not window.create_video_button.isEnabled()
+        assert Counter.changes == 0
+        window.ui_manager.update_ui_for_state(AppState.PROCESSING)
+        assert not window.slide_table.isEnabled() and window.cancel_button.isEnabled()
+    finally:
+        window._dirty = False
+        window.close()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+def test_waveform_job_delivers_png_and_can_be_cancelled(tmp_path, qapp):
+    from PySide6.QtTest import QTest
+    from ssmm.ui_dialogs import _WaveformJob
+    audio = tmp_path / "a.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=1", str(audio)], check=True)
+    results = []
+    job = _WaveformJob(audio, 200, 60)
+    job.ready.connect(results.append)
+    job.start()
+    for _ in range(100):
+        if results:
+            break
+        QTest.qWait(100)
+    assert results and results[0].startswith(b"\x89PNG")
+
+    slow = _WaveformJob(audio, 200, 60)
+    slow._command = ["sleep", "20"]
+    slow.start()
+    QTest.qWait(300)
+    slow.cancel()
+    QTest.qWait(300)
+    assert slow._process is not None and slow._process.poll() is not None

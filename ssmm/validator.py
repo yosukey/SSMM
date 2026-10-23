@@ -1086,7 +1086,9 @@ class ProjectValidator:
         
         slides_by_filename = {}
         for i, slide in enumerate(project_model.slides):
-            if slide.filename and slide.is_video:
+            # A kept-but-missing material is already reported as an error; its stale
+            # probe data must not produce a PinP summary for a file that is not there.
+            if slide.filename and slide.is_video and (project_model.project_folder / slide.filename).exists():
                 if slide.filename not in slides_by_filename:
                     slides_by_filename[slide.filename] = []
                 slides_by_filename[slide.filename].append((i, slide))

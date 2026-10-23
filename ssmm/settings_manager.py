@@ -320,7 +320,19 @@ class SettingsManager(QObject):
             'watermark_fontfamily': list(config.BUNDLED_FONTS.keys()),
         }
         for field_name, allowed in enum_checks.items():
-            if getattr(params, field_name) not in allowed:
+            value = getattr(params, field_name)
+            if value in allowed:
+                continue
+            # Hand-edited files often carry the right value in the wrong form, e.g.
+            # audio_sample_rate = 48000 instead of "48000", or "1920X1080".
+            candidate = str(value).strip()
+            if field_name == 'resolution':
+                candidate = candidate.lower()
+            for option in allowed:
+                if str(option) == candidate:
+                    setattr(params, field_name, option)
+                    break
+            else:
                 reset(field_name, 'not an allowed value')
 
         # Clamp audio_channels to the valid range so it maps to a selectable combo entry.
@@ -399,7 +411,7 @@ class SettingsManager(QObject):
             return self._perform_save(file_path_to_save, project_model)
         return False
 
-    def _perform_save(self, file_path: Path, project_model: ProjectModel) -> bool:
+    def _perform_save(self, file_path: Path, project_model: ProjectModel, notify: bool = True) -> bool:
         paths_data = {}
         
         if project_model.project_folder:
@@ -493,5 +505,7 @@ class SettingsManager(QObject):
             QMessageBox.critical(self.main_window, self.tr("Error"), self.tr("Failed to save settings: {0}").format(e))
             return False
 
-        QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
+        if notify:
+            QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
+        self.log_message.emit(f"[INFO] Project settings saved to: {file_path}", 'app')
         return True

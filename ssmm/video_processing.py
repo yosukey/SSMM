@@ -272,8 +272,9 @@ class VideoProcessor(QObject):
                 if self._get_is_canceled():
                     raise ProcessingCanceled()
 
-                self._commit_output(temp_video_path, final_video_path)
-
+                # Written before the video is moved into place, so the chapter list is
+                # also available when that move fails and the render is kept under its
+                # temporary name.
                 if project_model.parameters.export_youtube_chapters:
                     self.log_message.emit("[INFO] Generating YouTube chapter file...", 'app')
                     try:
@@ -281,6 +282,8 @@ class VideoProcessor(QObject):
                         self.log_message.emit("[SUCCESS] YouTube chapter file generated successfully.", 'app')
                     except Exception as chap_e:
                         self.log_message.emit(f"[ERROR] Could not generate YouTube chapter file: {chap_e}", 'app')
+
+                self._commit_output(temp_video_path, final_video_path)
 
                 self.log_message.emit(f"[SUCCESS] Video created successfully at: {final_video_path}", 'app')
                 return (True, str(final_video_path))
