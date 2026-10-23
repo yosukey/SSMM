@@ -427,6 +427,10 @@ def test_malformed_settings_file_loads_with_defaults(tmp_path, qapp):
     assert model.parameters.hardware_encoding is None
     assert model.parameters.encoding_mode == defaults.encoding_mode
     assert model.parameters.fps == 30 and model.parameters.watermark_text == ""
-    assert len(model.slides) == 2
+    # The toml parser itself drops the non-table array element.
+    assert len(model.slides) == 1
     assert model.slides[0].filename is None and model.slides[0].transition_to_next == "None"
     assert model.slides[0].p_hash is None
+
+    (tmp_path / "settings.toml").write_text('slides = "not a list"\n[paths]\nproject_folder_is_self = true\n', encoding="utf-8")
+    assert manager.load_from_file(tmp_path / "settings.toml").slides == []
