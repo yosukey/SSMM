@@ -226,3 +226,26 @@ def test_settings_round_trip_and_legacy_file(tmp_path, qapp, monkeypatch):
     loaded = manager.load_from_file(tmp_path / "settings.toml")
     assert loaded.parameters.encoding_mode == "CBR"
     assert loaded.slides[0].interval_to_next == config.INTERVAL_RANGE[1]
+
+
+@pytest.mark.parametrize("codec, ext", [
+    ("libx264", ".mov"), ("hevc_nvenc", ".mov"), ("mpeg4", ".mov"),
+    ("libaom-av1", ".mp4"), ("av1_nvenc", ".mp4"), ("av1_qsv", ".mp4"), ("av1_amf", ".mp4"),
+])
+def test_intermediate_container_per_encoder(codec, ext):
+    assert VideoProcessor._intermediate_container_for(codec) == ext
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+@pytest.mark.parametrize("encoder", ["libx264", "libaom-av1"])
+def test_intermediate_segment_accepts_encoder_with_pcm(tmp_path, encoder):
+    # FFmpeg's MOV muxer rejects AV1; the chosen container must accept every encoder.
+    encoders = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    if f" {encoder} " not in encoders:
+        pytest.skip(f"{encoder} not available")
+    out = tmp_path / f"seg{VideoProcessor._intermediate_container_for(encoder)}"
+    extra = ["-cpu-used", "8", "-crf", "50", "-b:v", "0"] if encoder == "libaom-av1" else []
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=64x48:r=10:d=0.5",
+                    "-f", "lavfi", "-i", "sine=d=0.5", "-t", "0.5", "-c:v", encoder, *extra, "-pix_fmt", "yuv420p",
+                    "-c:a", config.INTERMEDIATE_AUDIO_CODEC, str(out)], check=True)
+    assert out.stat().st_size > 0

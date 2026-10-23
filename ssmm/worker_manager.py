@@ -166,7 +166,13 @@ class WorkerManager(QObject):
             # task, so a queued signal to cancel() would only be delivered after the
             # work already finished. cancel() merely flips a thread-safe flag, so
             # call it directly from the GUI thread (mirrors VideoProcessor.cancel()).
-            worker.cancel()
+            try:
+                worker.cancel()
+            except RuntimeError:
+                # The task has just finished: deleteLater() already destroyed the
+                # worker before the queued reference cleanup ran. Nothing is left to
+                # cancel, and raising here would abort closeEvent's thread shutdown.
+                pass
 
         if self.video_processor:
             self.video_processor.cancel()
