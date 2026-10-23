@@ -2,26 +2,15 @@
 import copy
 import datetime
 import json
-import platform
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path
 from urllib import request
-from packaging.version import parse as parse_version
+from packaging.version import InvalidVersion, parse as parse_version
 from typing import Optional, Callable
-import os
-import shutil
-
-import psutil
-import PIL
-import PySide6
-import toml
-import imagehash
 
 from PySide6.QtCore import (QItemSelection, QItemSelectionModel, QObject, Qt,
-                            QTimer, QUrl, Signal, QStandardPaths)
+                            QThread, QTimer, QUrl, Signal, QStandardPaths)
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QMovie,
                            QPalette, QTextCharFormat, QTextCursor, QShowEvent)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
@@ -32,17 +21,19 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
 from ssmm import app_settings
 from ssmm import config
 from ssmm import pdf_utils
+from ssmm import project_init
 from ssmm.ffmpeg_installer import FFmpegInstaller
+from ssmm.media_utils import format_duration_suffix, slide_timeline
 from ssmm.models import (AppState, ProjectModel, ProjectParameters, Slide,
                     ValidationMessages)
 from ssmm.settings_manager import SettingsManager
+from ssmm.system_info import collect_system_info
 from ssmm.slide_table_manager import SlideTableManager
 from ssmm.ui_dialogs import (EditSlidesDialog, InstallProgressDialog,
                         SelectSlideDialog, PageMappingDialog)
 from ssmm.ui_main import Ui_MainWindow
 from ssmm.ui_state_manager import UIStateManager
-from ssmm.utils import (bundled_ffmpeg_exists, get_ffmpeg_path, get_ffmpeg_source,
-                   resolve_resource_path)
+from ssmm.utils import get_ffmpeg_path, resolve_resource_path
 from ssmm.validator import ProjectValidator
 from ssmm.worker_manager import WorkerManager
 
@@ -122,11 +113,50 @@ class HoverGifWidget(QWidget):
         super().leaveEvent(event)
 
 class EmittingStream(QObject):
+    """File-like object that forwards complete lines to the debug log.
+
+    print() writes the text and the trailing newline in separate calls, so the
+    stream buffers until a newline arrives; emitting each fragment would add an
+    empty time-stamped line for every print.
+    """
     text_written = Signal(str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._buffer = ""
+
     def write(self, text):
-        self.text_written.emit(str(text), 'app')
+        self._buffer += str(text)
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self.text_written.emit(line, 'app')
+        return len(str(text))
+
     def flush(self):
-        pass
+        if self._buffer.strip():
+            self.text_written.emit(self._buffer, 'app')
+        self._buffer = ""
+
+
+class UpdateCheckWorker(QThread):
+    """Queries the latest GitHub release off the GUI thread."""
+    result_ready = Signal(str, str, str)  # latest version tag, release url, error message
+
+    def __init__(self, api_url: str, parent=None):
+        super().__init__(parent)
+        self._api_url = api_url
+
+    def run(self):
+        try:
+            req = request.Request(self._api_url, headers={'Accept': 'application/vnd.github.v3+json'})
+            with request.urlopen(req, timeout=config.UPDATE_CHECK_TIMEOUT_S) as response:
+                if response.status != 200:
+                    raise ConnectionError(f"GitHub API returned status {response.status}")
+                data = json.loads(response.read().decode('utf-8'))
+            self.result_ready.emit(data.get("tag_name", "v0.0.0").lstrip('v'), data.get("html_url", ""), "")
+        except Exception as e:
+            self.result_ready.emit("", "", str(e))
 
 class MainWindow(QWidget):
     __version__ = config.APP_VERSION
@@ -248,7 +278,7 @@ class MainWindow(QWidget):
         if self.ffmpeg_installed:
             self.worker_manager.start_encoder_test(self.validator)
         else:
-            msg = self._ffmpeg_missing_message()
+            msg = self.ffmpeg_missing_message()
             self.write_debug(f"[FATAL] {msg}")
             QMessageBox.critical(self, self.tr("FFmpeg Not Found"), msg)
             self.state_machine.transition_to(AppState.ERROR)
@@ -330,61 +360,17 @@ class MainWindow(QWidget):
             return False
 
     def _setup_licenses_tab(self):
-        if not bundled_ffmpeg_exists():
-            self.ffmpeg_compliance_label.setVisible(False)
-            self.system_ffmpeg_notice_label.setVisible(False)
-            self.ffmpeg_license_header.setVisible(False)
-            self.ffmpeg_license_text_edit.setVisible(False)
-            self.ffmpeg_build_config_header.setVisible(False)
-            self.ffmpeg_build_config_text_edit.setVisible(False)
-            return
-
-        ffmpeg_source = get_ffmpeg_source()
-
-        self.ffmpeg_compliance_label.setVisible(True)
-        self.ffmpeg_compliance_label.setText(
-            self.tr("This software uses libraries from the <a href='https://www.ffmpeg.org/'>FFmpeg</a> project licensed under the LGPLv2.1.<br><br>"
-            "The distributor of this application is responsible for providing the exact corresponding source code. "
-            "If you received this application with a bundled FFmpeg, you should have also received information on how to obtain the source. "
-            "For reference, common FFmpeg builds and their sources can be found at sites like "
-            "<a href='https://www.gyan.dev/ffmpeg/builds/'>Gyan.dev</a> or "
-            "<a href='https://github.com/BtbN/FFmpeg-Builds/releases'>BtbN/FFmpeg-Builds</a>.")
+        # FFmpeg is intentionally not bundled: a system build is used so that the
+        # hardware encoders (NVENC, QSV, AMF, VideoToolbox) of the machine work.
+        self.ffmpeg_notice_label.setText(
+            self.tr("<b>FFmpeg</b><br>"
+            "SSMM does not include FFmpeg. It uses the FFmpeg installed on this computer "
+            "(a folder named 'ffmpeg-bin' in your home directory, the system PATH, or a "
+            "package manager such as winget or Homebrew), so that the hardware encoders "
+            "of your GPU can be used. FFmpeg is licensed separately by the "
+            "<a href='https://www.ffmpeg.org/legal.html'>FFmpeg project</a>; refer to the "
+            "license of the build you installed.")
         )
-        
-        self.ffmpeg_license_header.setVisible(True)
-        self.ffmpeg_license_text_edit.setVisible(True)
-        self.ffmpeg_build_config_header.setVisible(True)
-        self.ffmpeg_build_config_text_edit.setVisible(True)
-
-        try:
-            lgpl_path = resolve_resource_path("resources/ffmpeg/LGPL.txt")
-            if lgpl_path.exists():
-                with open(lgpl_path, 'r', encoding='utf-8') as f:
-                    self.ffmpeg_license_text_edit.setText(f.read())
-            else:
-                self.ffmpeg_license_text_edit.setText(self.tr("Bundled ffmpeg/LGPL.txt not found."))
-        except Exception as e:
-            self.ffmpeg_license_text_edit.setText(self.tr("Error loading LGPL.txt: {0}").format(e))
-
-        try:
-            config_path = resolve_resource_path("resources/ffmpeg/ffmpeg_build_config.txt")
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    self.ffmpeg_build_config_text_edit.setText(f.read())
-            else:
-                self.ffmpeg_build_config_text_edit.setText(self.tr("Bundled ffmpeg/ffmpeg_build_config.txt not found."))
-        except Exception as e:
-            self.ffmpeg_build_config_text_edit.setText(self.tr("Error loading ffmpeg_build_config.txt: {0}").format(e))
-
-        if ffmpeg_source == 'system':
-            self.system_ffmpeg_notice_label.setText(
-                self.tr("<b>FFmpeg Status:</b><br>"
-                "The system-installed version of FFmpeg is being prioritized for use.<br>"
-                "For license and build configuration, please refer to the FFmpeg version installed on your system.")
-            )
-            self.system_ffmpeg_notice_label.setVisible(True)
-        else:
-            self.system_ffmpeg_notice_label.setVisible(False)
 
     def _setup_font_license_tab(self):
         try:
@@ -653,16 +639,19 @@ class MainWindow(QWidget):
         self.watermark_rotation_combo.addItem(self.tr("45 Degrees (Clockwise)"), "45")
         self.watermark_rotation_combo.addItem(self.tr("-45 Degrees (C-Clockwise)"), "-45")
         
+        # Item data holds the parameter value (a config key); the text is only a label.
         self.encoding_mode_combo.clear()
-        self.encoding_mode_combo.addItems(list(config.ENCODING_MODES.values()))
-        
+        for key, label in config.ENCODING_MODES.items():
+            self.encoding_mode_combo.addItem(label, key)
+
         self.pass_combo.clear()
-        self.pass_combo.addItems(list(config.ENCODING_PASSES.values()))
+        for key, label in config.ENCODING_PASSES.items():
+            self.pass_combo.addItem(label, key)
         
         for combo in self.parameters_tabs.findChildren(QComboBox):
             self._adjust_combo_box_view_width(combo)
 
-    def _update_hardware_encoding_options(self, codec: str):
+    def update_hardware_encoding_options(self, codec: str):
         self.hardware_encoding_combo.blockSignals(True)
         self.hardware_encoding_combo.clear()
         try:
@@ -697,14 +686,14 @@ class MainWindow(QWidget):
         params.fps = int(fps_text) if fps_text else 30
         params.codec = self.codec_combo.currentText()
         params.hardware_encoding = self.hardware_encoding_combo.currentData()
-        params.encoding_mode = self.encoding_mode_combo.currentText()
+        params.encoding_mode = self.encoding_mode_combo.currentData() or "QUALITY"
         params.encoding_value = self.value_spin.value()
-        params.encoding_pass = self.pass_combo.currentText()
+        params.encoding_pass = self.pass_combo.currentData() or "ONE_PASS"
         params.audio_bitrate = self.audio_bitrate_combo.currentText()
         params.audio_sample_rate = self.audio_sample_rate_combo.currentText()
         params.audio_channels = self.audio_channels_combo.currentData()
         params.normalize_loudness = self.normalize_loudness_checkbox.isChecked()
-        params.normalize_loudness_mode = self.normalize_loudness_mode_combo.currentText()
+        params.normalize_loudness_mode = self.normalize_loudness_mode_combo.currentData() or "TWO_PASS"
         params.add_watermark = self.add_watermark_checkbox.isChecked()
         params.watermark_text = self.watermark_text_input.text()
         params.watermark_opacity = self.watermark_opacity_spin.value()
@@ -750,8 +739,11 @@ class MainWindow(QWidget):
         self.worker_manager.validation_canceled.connect(self.on_validation_canceled)
         self.worker_manager.transient_worker_finished.connect(self.on_transient_worker_finished)
         self.worker_manager.transient_worker_busy.connect(self.on_transient_worker_busy)
+        # The hardware encoder decides which encoding modes/passes are available, so it
+        # has its own handler that also refreshes those options.
+        self.hardware_encoding_combo.currentIndexChanged.connect(self.on_hardware_encoding_changed)
         param_widgets_on_change = [
-            self.resolution_combo, self.fps_combo, self.hardware_encoding_combo, self.pass_combo,
+            self.resolution_combo, self.fps_combo, self.pass_combo,
             self.audio_bitrate_combo, self.audio_sample_rate_combo, self.audio_channels_combo,
             self.normalize_loudness_mode_combo,
         ]
@@ -825,103 +817,6 @@ class MainWindow(QWidget):
     def clear_debug_log(self):
         self.debug_text.clear()
 
-    def _get_system_info(self):
-        def _bytes_to_gb(bytes_val):
-            return round(bytes_val / (1024 ** 3), 2)
-
-        info_lines = [
-            "================== System Information ==================",
-            f"App Version: {self.__version__}",
-            f"Platform: {platform.platform()}",
-            f"Architecture: {platform.machine()}",
-            f"Python Version: {sys.version}",
-        ]
-
-        cpu_info_lines = ["---------------------- CPU -----------------------"]
-        try:
-            cpu_info_lines.append(f"  Model: {platform.processor()}")
-            cpu_info_lines.append(f"  Physical Cores: {psutil.cpu_count(logical=False)}")
-            cpu_info_lines.append(f"  Logical Cores: {psutil.cpu_count(logical=True)}")
-            cpu_freq = psutil.cpu_freq()
-            if cpu_freq:
-                cpu_info_lines.append(f"  Max Frequency: {cpu_freq.max:.2f} Mhz")
-        except Exception as e:
-            cpu_info_lines.append(f"  Could not get detailed CPU info: {e}")
-        info_lines.extend(cpu_info_lines)
-
-        memory_info_lines = ["--------------------- Memory ---------------------"]
-        try:
-            vmem = psutil.virtual_memory()
-            memory_info_lines.append(f"  Total: {_bytes_to_gb(vmem.total)} GB")
-            memory_info_lines.append(f"  Available: {_bytes_to_gb(vmem.available)} GB")
-            memory_info_lines.append(f"  Used: {_bytes_to_gb(vmem.used)} GB ({vmem.percent}%)")
-        except Exception as e:
-            memory_info_lines.append(f"  Could not get memory info: {e}")
-        info_lines.extend(memory_info_lines)
-        
-        disk_info_lines = ["------------------ Disk Partitions -----------------"]
-        try:
-            partitions = psutil.disk_partitions()
-            for part in partitions:
-                # Skip optical drives and unformatted partitions
-                if 'cdrom' in part.opts or not part.fstype:
-                    continue
-                disk_info_lines.append(f"  Device: {part.device} (Mount: {part.mountpoint}, FSType: {part.fstype})")
-                try:
-                    usage = psutil.disk_usage(part.mountpoint)
-                    disk_info_lines.append(f"    Total: {_bytes_to_gb(usage.total)} GB")
-                    disk_info_lines.append(f"    Used: {_bytes_to_gb(usage.used)} GB ({usage.percent}%)")
-                    disk_info_lines.append(f"    Free: {_bytes_to_gb(usage.free)} GB")
-                except Exception:
-                    disk_info_lines.append(f"    Could not retrieve usage for this partition.")
-        except Exception as e:
-            disk_info_lines.append(f"  Could not get disk partitions: {e}")
-        info_lines.extend(disk_info_lines)
-
-        libs_info_lines = ["----------------- Library Versions -----------------"]
-        libs_to_check = {
-            "pypdfium2": pdf_utils.pypdfium2_version(),
-            "Pillow": PIL,
-            "PySide6": PySide6,
-            "toml": toml,
-            "Imagehash": imagehash
-        }
-        for name, lib in libs_to_check.items():
-            try:
-                version = lib if isinstance(lib, str) else getattr(lib, '__version__', 'N/A')
-                libs_info_lines.append(f"  {name}: {version}")
-            except Exception:
-                libs_info_lines.append(f"  {name}: Error getting version")
-        info_lines.extend(libs_info_lines)
-
-        info_lines.append("------------------ FFmpeg Information ------------------")
-        try:
-            ffmpeg_path = get_ffmpeg_path()
-            
-            result = subprocess.run(
-                [str(ffmpeg_path), "-version"], 
-                capture_output=True, text=True, timeout=5, 
-                encoding='utf-8', errors='replace',
-                creationflags=config.SUBPROCESS_CREATION_FLAGS
-            )
-            ffmpeg_version = result.stdout.splitlines()[0].strip() if result.stdout else "N/A"
-            info_lines.append(f"Source: {get_ffmpeg_source()}")
-            info_lines.append(f"Version: {ffmpeg_version}")
-            info_lines.append(f"Path: {str(ffmpeg_path)}")
-        except Exception as e:
-            info_lines.append(f"Could not retrieve FFmpeg info: {e}")
-
-        info_lines.append("----------------- Available Encoders -----------------")
-        if self.available_encoders_map:
-            for codec, encoders in sorted(self.available_encoders_map.items()):
-                info_lines.append(f"  {codec}: {', '.join(encoders)}")
-        else:
-            info_lines.append("No functional encoders detected or test not run yet.")
-
-        info_lines.append("========================================================")
-        
-        return "\n".join(info_lines)
-
     def export_debug_log(self):
         if not self.project_model.output_folder or not self.project_model.output_folder.is_dir():
             QMessageBox.warning(self, self.tr("Output Folder Not Set"), self.tr("Please select a valid output folder before exporting the debug log."))
@@ -944,7 +839,7 @@ class MainWindow(QWidget):
 
         if file_path_str:
             try:
-                system_info = self._get_system_info()
+                system_info = collect_system_info(self.__version__, self.available_encoders_map)
                 full_content = f"{system_info}\n\n[Log Start]\n{log_content}"
                 with open(file_path_str, 'w', encoding='utf-8') as f:
                     f.write(full_content)
@@ -958,7 +853,7 @@ class MainWindow(QWidget):
 
         self.project_model.parameters.codec = new_codec
 
-        self._update_hardware_encoding_options(new_codec)
+        self.update_hardware_encoding_options(new_codec)
 
         current_hw_data = self.project_model.parameters.hardware_encoding
         available_hw_data = [self.hardware_encoding_combo.itemData(i) for i in range(self.hardware_encoding_combo.count())]
@@ -975,16 +870,27 @@ class MainWindow(QWidget):
             self.hardware_encoding_combo.setCurrentIndex(index_to_set)
         self.hardware_encoding_combo.blockSignals(False)
 
+        self._refresh_encoding_options_preserving_value()
+
+    def on_hardware_encoding_changed(self):
+        if self._is_syncing:
+            return
+        self.project_model.parameters.hardware_encoding = self.hardware_encoding_combo.currentData()
+        self._refresh_encoding_options_preserving_value()
+
+    def _refresh_encoding_options_preserving_value(self):
         # update_encoding_options() resets the value spin to a mode default. Changing
-        # only the codec should not discard the user's quality/bitrate, so preserve it
-        # across the refresh (clamped to the new codec's range). If the refresh forces
-        # a different mode (e.g. VideoToolbox → VBR), keep that mode's default instead.
+        # only the codec/encoder should not discard the user's quality/bitrate, so
+        # preserve it across the refresh (clamped to the new range). If the refresh
+        # forces a different mode (e.g. VideoToolbox → VBR), keep that mode's default.
         preserved_value = self.value_spin.value()
-        preserved_mode = self.encoding_mode_combo.currentText()
-        self.on_encoding_mode_changed()
-        if self.encoding_mode_combo.currentText() == preserved_mode:
+        preserved_mode = self.encoding_mode_combo.currentData()
+        self.update_encoding_options()
+        if self.encoding_mode_combo.currentData() == preserved_mode:
             clamped = max(self.value_spin.minimum(), min(self.value_spin.maximum(), preserved_value))
             self.value_spin.setValue(clamped)
+        self._sync_ui_to_model()
+        self.parameters_changed_event()
 
     def on_encoding_mode_changed(self):
         if self._is_syncing:
@@ -1019,17 +925,26 @@ class MainWindow(QWidget):
     def _on_preview_toggled(self, is_checked: bool):
         self.slide_table_manager.toggle_previews(is_checked)
         
-    def update_encoding_options(self, _=None):
-        mode = self.encoding_mode_combo.currentText()
+    def _selected_encoder_name(self) -> str:
         selected_codec = self.codec_combo.currentText()
         hw_encoder_name = self.hardware_encoding_combo.currentData()
-        
-        hw_codec_name = config.CODEC_MAP.get(selected_codec, {}).get(hw_encoder_name)
-        is_videotoolbox = 'videotoolbox' in (hw_codec_name or '')
+        if hw_encoder_name:
+            return config.CODEC_MAP.get(selected_codec, {}).get(hw_encoder_name) or ""
+        return config.SOFTWARE_CODEC_MAP.get(selected_codec, "")
 
-        self.pass_combo.setEnabled(True)
+    def update_encoding_options(self, _=None):
+        mode = self.encoding_mode_combo.currentData()
+        selected_codec = self.codec_combo.currentText()
+        encoder_name = self._selected_encoder_name()
+        is_videotoolbox = 'videotoolbox' in encoder_name
+        # Only offer 2-Pass for encoders that actually implement it.
+        supports_two_pass = encoder_name in config.TWO_PASS_ENCODERS or encoder_name in config.MULTIPASS_ENCODERS
 
-        if mode == config.ENCODING_MODES["QUALITY"]:
+        self.pass_combo.setEnabled(supports_two_pass)
+        if not supports_two_pass:
+            self.pass_combo.setCurrentIndex(self.pass_combo.findData("ONE_PASS"))
+
+        if mode == "QUALITY":
             self.value_spin.setSuffix("")
             self.value_spin.setSingleStep(1)
             if selected_codec == 'MPEG-4 Part 2':
@@ -1045,33 +960,29 @@ class MainWindow(QWidget):
             if is_videotoolbox:
                 self.encoding_mode_combo.blockSignals(True)
                 try:
-                    self.encoding_mode_combo.setCurrentText(config.ENCODING_MODES["VBR"])
+                    self.encoding_mode_combo.setCurrentIndex(self.encoding_mode_combo.findData("VBR"))
                 finally:
                     self.encoding_mode_combo.blockSignals(False)
                 # Re-run to reconfigure the spinbox for the VBR mode.
                 self.update_encoding_options()
                 return
-            else:
-                 self.pass_combo.setEnabled(False)
-        
-        elif mode == config.ENCODING_MODES["VBR"]:
+            # Quality mode is always single pass.
+            self.pass_combo.setEnabled(False)
+
+        elif mode == "VBR":
             self.value_label.setText(self.tr("Avg Bitrate (kbps):"))
             self.value_spin.setSuffix(self.tr(" kbps"))
             self.value_spin.setRange(*config.ENCODING_BITRATE_RANGE_KBPS)
             self.value_spin.setSingleStep(100)
             self.value_spin.setValue(config.DEFAULT_VBR_BITRATE)
-            if is_videotoolbox:
-                self.pass_combo.setEnabled(False)
-            
-        elif mode == config.ENCODING_MODES["CBR"]:
+
+        elif mode == "CBR":
             self.value_label.setText(self.tr("Bitrate (kbps):"))
             self.value_spin.setSuffix(self.tr(" kbps"))
             self.value_spin.setRange(*config.ENCODING_BITRATE_RANGE_KBPS)
             self.value_spin.setSingleStep(100)
             self.value_spin.setValue(config.DEFAULT_CBR_BITRATE)
-            if is_videotoolbox:
-                self.pass_combo.setEnabled(False)
-    
+
     def prompt_install_ffmpeg(self):
         reply = QMessageBox.question(self, self.tr('Install FFmpeg'), self.tr("This application requires FFmpeg to create videos.\n\nThis tool will attempt to install it using a system package manager (winget for Windows, Homebrew for macOS).\n\nNote:\n• The process may take several minutes.\n• Administrator privileges (password) may be required.\n\nDo you want to proceed with the installation?"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -1185,9 +1096,14 @@ class MainWindow(QWidget):
         if not self.filename_input.text() and self.project_model.project_folder:
             self.filename_input.setText(self.project_model.project_folder.name)
 
-        # Record the successfully loaded project in the recent list.
+        # Record the successfully loaded project in the recent list. A DougaMeijin
+        # import is recorded as the extracted project folder: re-opening the .dmj
+        # would extract another copy and drop the edits made since the import.
         if self._pending_recent_path:
-            app_settings.add_recent_project(str(self._pending_recent_path))
+            recent_path = self._pending_recent_path
+            if recent_path.suffix.lower() == '.dmj' and self.project_model.project_folder:
+                recent_path = self.project_model.project_folder
+            app_settings.add_recent_project(str(recent_path))
             self._pending_recent_path = None
             self._rebuild_recent_menu()
 
@@ -1246,82 +1162,74 @@ class MainWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, self.tr('Error'), self.tr('Failed to open folder:\n{0}').format(e))
 
-    def _find_single_pdf(self, folder: Path) -> Optional[Path]:
-        if not folder or not folder.is_dir():
-            return None
-        pdfs = list(folder.glob('*.[pP][dD][fF]'))
-        if not pdfs:
-            raise FileNotFoundError(self.tr("No PDF file found in the selected project folder."))
-        if len(pdfs) > 1:
-            raise ValueError(self.tr("Multiple PDF files found. Please ensure there is only one PDF in the folder."))
-        return pdfs[0]
-
     def _rescan_available_materials(self):
         if self.project_model and self.project_model.project_folder:
             try:
-                self.project_model.available_materials = sorted([
-                    p.name for p in self.project_model.project_folder.iterdir()
-                    if p.is_file() and p.suffix.lower() in config.SUPPORTED_FORMATS
-                ])
+                self.project_model.available_materials = project_init.scan_materials(self.project_model.project_folder)
             except Exception as e:
                 self.write_debug(f"[ERROR] Error while rescanning material files: {e}")
 
+    @staticmethod
+    def _release_version(version_str: str):
+        # 'git describe' yields e.g. '1.2.0-3-gabc123' for untagged commits; compare
+        # on the release part only. Returns None when it is not a version at all.
+        base = re.split(r'-\d+-g[0-9a-f]+$', version_str.strip())[0]
+        try:
+            return parse_version(base)
+        except InvalidVersion:
+            return None
+
     def check_for_updates(self):
-        if self.__version__ == 'local-dev':
-            self.write_debug("[INFO] Skipping update check for local development version.", 'app')
+        if self.__version__ == 'local-dev' or self._release_version(self.__version__) is None:
+            self.write_debug(f"[INFO] Skipping update check for development version '{self.__version__}'.", 'app')
             QMessageBox.information(self, self.tr("Update Check Skipped"), self.tr("Running in local-dev mode. Update check skipped."))
+            return
+        if getattr(self, '_update_worker', None) is not None and self._update_worker.isRunning():
             return
 
         self.write_debug("[INFO] --- Manually checking for application updates ---", 'app')
-        repo_url = config.REPO_URL
-        repo_path = repo_url.replace("https://github.com/", "")
+        repo_path = config.REPO_URL.replace("https://github.com/", "")
         api_url = f"https://api.github.com/repos/{repo_path}/releases/latest"
 
-        # parse_version is imported at module scope; no in-function import guard is
-        # needed (a missing 'packaging' would already fail the module import).
+        # The request runs on a worker thread so a slow network cannot freeze the UI.
+        self.check_for_updates_action.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._update_worker = UpdateCheckWorker(api_url, self)
+        self._update_worker.result_ready.connect(self._on_update_check_finished)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_worker.start()
 
-        try:
-            # Access GitHub API (timeout set to 5 seconds)
-            req = request.Request(api_url, headers={'Accept': 'application/vnd.github.v3+json'})
-            with request.urlopen(req, timeout=5) as response:
-                if response.status != 200:
-                    raise ConnectionError(f"GitHub API returned status {response.status}")
-                
-                data = json.loads(response.read().decode('utf-8'))
-                latest_version_tag = data.get("tag_name", "v0.0.0").lstrip('v')
-                release_url = data.get("html_url", "")
+    def _on_update_check_finished(self, latest_version_tag: str, release_url: str, error: str):
+        QApplication.restoreOverrideCursor()
+        self.check_for_updates_action.setEnabled(True)
+        self._update_worker = None
 
-            self.write_debug(f"[INFO] Current version: {self.__version__}, Latest version on GitHub: {latest_version_tag}", 'app')
+        latest = self._release_version(latest_version_tag) if not error else None
+        if error or latest is None:
+            reason = error or f"unrecognized version '{latest_version_tag}'"
+            self.write_debug(f"[WARNING] Could not check for updates. This may be due to being offline or a network issue. Error: {reason}", 'app')
+            QMessageBox.warning(self, self.tr("Update Check Failed"), self.tr("Could not check for updates. This may be due to being offline or a network issue.\n\nError: {0}").format(reason))
+            return
 
-            QApplication.restoreOverrideCursor()
-
-            # Compare versions
-            if parse_version(latest_version_tag) > parse_version(self.__version__):
-                self.write_debug(f"[INFO] New version {latest_version_tag} found!", 'app')
-                
-                # Show notification to the user
-                msg_box = QMessageBox(self)
-                msg_box.setWindowTitle(self.tr("New Version Available"))
-                msg_box.setIcon(QMessageBox.Information)
-                msg_box.setText(
-                    self.tr("A new version <b>{0}</b> has been released.<br><br>"
-                    "You are currently running version {1}.").format(latest_version_tag, self.__version__)
-                )
-                msg_box.setInformativeText(
-                    self.tr("It is recommended to update to the latest version.<br>"
-                    "<a href='{0}'>Open Download Page</a>").format(release_url)
-                )
-                msg_box.setStandardButtons(QMessageBox.Ok)
-                msg_box.exec()
-            else:
-                self.write_debug("[INFO] You are running the latest version.", 'app')
-                QMessageBox.information(self, self.tr("No Updates Found"), self.tr("You are currently running the latest version ({0}).").format(self.__version__))
-
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            self.write_debug(f"[WARNING] Could not check for updates. This may be due to being offline or a network issue. Error: {e}", 'app')
-            QMessageBox.warning(self, self.tr("Update Check Failed"), self.tr("Could not check for updates. This may be due to being offline or a network issue.\n\nError: {0}").format(e))
+        self.write_debug(f"[INFO] Current version: {self.__version__}, Latest version on GitHub: {latest_version_tag}", 'app')
+        if latest > self._release_version(self.__version__):
+            self.write_debug(f"[INFO] New version {latest_version_tag} found!", 'app')
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle(self.tr("New Version Available"))
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setText(
+                self.tr("A new version <b>{0}</b> has been released.<br><br>"
+                "You are currently running version {1}.").format(latest_version_tag, self.__version__)
+            )
+            msg_box.setInformativeText(
+                self.tr("It is recommended to update to the latest version.<br>"
+                "<a href='{0}'>Open Download Page</a>").format(release_url)
+            )
+            msg_box.setStandardButtons(QMessageBox.Ok)
+            msg_box.exec()
+        else:
+            self.write_debug("[INFO] You are running the latest version.", 'app')
+            QMessageBox.information(self, self.tr("No Updates Found"), self.tr("You are currently running the latest version ({0}).").format(self.__version__))
 
     def run_validation(self):
         if not self._check_and_handle_pdf_changes():
@@ -1418,16 +1326,27 @@ class MainWindow(QWidget):
         if not sanitized_filename:
             sanitized_filename = project_model.project_folder.name if project_model.project_folder else "output"
         if project_model.parameters.append_duration_checkbox:
-            total_duration = sum(s.duration for s in project_model.slides) + sum(s.interval_to_next for s in project_model.slides[:-1])
-            minutes = int(total_duration // 60)
-            secs = int(round(total_duration % 60))
-            duration_str = f"{minutes}m{secs}s" if minutes > 0 else f"{secs}s"
+            # The rendered (frame-quantized) length, rounded before splitting into
+            # minutes and seconds so it can never read e.g. "4m60s".
+            _starts, total_duration = slide_timeline(project_model.slides, project_model.parameters.fps)
+            duration_str = format_duration_suffix(total_duration)
             if duration_str != "0s":
                 sanitized_filename += f"_{duration_str}"
         output_dir = project_model.output_folder if project_model.output_folder else Path(".")
         return output_dir / f"{sanitized_filename}.mp4"
 
+    def _flush_pending_edits(self):
+        # Apply edits still waiting in a debounce timer, so that an edit made just
+        # before clicking Create/Preview invalidates the validation as it should.
+        if self.parameter_update_timer.isActive():
+            self.parameter_update_timer.stop()
+            self.on_parameter_changed()
+        if self.cosmetic_update_timer.isActive():
+            self.cosmetic_update_timer.stop()
+            self.on_cosmetic_parameter_changed()
+
     def run_create_video(self):
+        self._flush_pending_edits()
         if self.state_machine.state != AppState.VALIDATED:
             QMessageBox.warning(self, self.tr('Warning'), self.tr('Validation is not successful. Please validate again.'))
             return
@@ -1451,6 +1370,7 @@ class MainWindow(QWidget):
         self.worker_manager.start_video_creation(self.project_model, is_verbose)
 
     def run_preview_generation(self):
+        self._flush_pending_edits()
         if self.state_machine.state != AppState.VALIDATED:
             QMessageBox.warning(self, self.tr('Warning'), self.tr('Please run a successful validation before creating a preview.'))
             return
@@ -1466,7 +1386,7 @@ class MainWindow(QWidget):
             include_intervals = dialog.get_include_intervals()
 
             try:
-                pdf_path = self._find_single_pdf(self.project_model.project_folder)
+                pdf_path = project_init.find_single_pdf(self.project_model.project_folder)
             except (FileNotFoundError, ValueError) as e:
                 QMessageBox.critical(self, self.tr("PDF Not Found"), str(e))
                 return
@@ -1548,33 +1468,6 @@ class MainWindow(QWidget):
 
         self.write_debug(f"[INFO] Project folder selected: {folder_path}")
         self._start_project_load(folder_path)
-
-    def initialize_project_from_pdf(self, project_model: ProjectModel) -> Path | None:
-        if not project_model.project_folder:
-            raise ValueError("Project folder is not set.")
-        
-        pdf_path = self._find_single_pdf(project_model.project_folder)
-        if not pdf_path:
-            return None
-
-        try:
-            page_count = pdf_utils.page_count(pdf_path)
-            project_model.slides = [Slide() for _ in range(page_count)]
-            project_model.available_materials = sorted([
-                p.name for p in project_model.project_folder.iterdir()
-                if p.is_file() and p.suffix.lower() in config.SUPPORTED_FORMATS
-            ])
-            return pdf_path
-        except Exception as e:
-            raise ValueError(f"Failed to read PDF file '{pdf_path.name}': {e}")
-            
-    def _automap_materials(self, project_model: ProjectModel):
-        for material_name in project_model.available_materials:
-            match = re.match(r'\[(\d{3})\]', material_name)
-            if match:
-                slide_index = int(match.group(1)) - 1
-                if 0 <= slide_index < len(project_model.slides) and project_model.slides[slide_index].filename is None:
-                    project_model.slides[slide_index].filename = material_name
 
     def select_output_folder(self):
         default_dir = app_settings.get_last_dir("output", "")
@@ -1783,16 +1676,11 @@ class MainWindow(QWidget):
         return True
 
     def _gather_project_file_hashes(self, folder: Path) -> dict:
-        if not folder: return {}
-        snapshot = {}
-        all_formats = config.SUPPORTED_FORMATS + ('.pdf',)
-        for entry in folder.iterdir():
-            if entry.is_file() and entry.suffix.lower() in all_formats:
-                try:
-                    snapshot[entry.name] = self.validator._get_file_hash(entry)
-                except (IOError, OSError) as e:
-                    self.write_debug(f"[WARNING] Could not calculate hash for file {entry.name}: {e}")
-                    snapshot[entry.name] = None
+        # Same helper the validator used to build validation_snapshot, so both sides
+        # treat unreadable files identically.
+        snapshot, unreadable = self.validator.snapshot_project_files(folder)
+        for name in unreadable:
+            self.write_debug(f"[WARNING] Could not calculate hash for file {name}.")
         return snapshot
 
     def _format_elapsed_time(self, seconds):
@@ -1903,7 +1791,7 @@ class MainWindow(QWidget):
         
         selection_model.select(selection, QItemSelectionModel.Select)
 
-    def _ffmpeg_missing_message(self) -> str:
+    def ffmpeg_missing_message(self) -> str:
         base_message = self.tr("A matching pair of ffmpeg and ffprobe executables was not found. This application requires FFmpeg.")
         
         user_folder_tip = self.tr(
@@ -1924,16 +1812,16 @@ class MainWindow(QWidget):
         # loaded project. The load-path caller (on_state_changed) clears the project
         # on False, while the re-validation caller (run_validation) simply aborts,
         # so an accidental Cancel here no longer discards unsaved slide edits.
+        if not self.project_model.project_folder or not self.project_model.project_folder.is_dir():
+            return False
         try:
-            pdf_path = self._find_single_pdf(self.project_model.project_folder)
-            if not pdf_path:
-                return False
+            pdf_path = project_init.find_single_pdf(self.project_model.project_folder)
         except (FileNotFoundError, ValueError) as e:
             QMessageBox.critical(self, self.tr("PDF Error"), str(e))
             return False
 
-        current_pdf_hash = self.validator._get_file_hash(pdf_path)
-        current_pdf_structure = self.validator._get_pdf_structure(pdf_path)
+        current_pdf_hash = self.validator.get_file_hash(pdf_path)
+        current_pdf_structure = self.validator.get_pdf_structure(pdf_path)
         
         # A matching hash means the PDF is byte-for-byte unchanged. Still require the
         # in-memory slide count to match the PDF's page count before skipping analysis:
@@ -1960,7 +1848,7 @@ class MainWindow(QWidget):
             )
             migrate_button = msg_box.addButton(self.tr("Migrate Settings (Experimental)"), QMessageBox.ActionRole)
             reinit_button = msg_box.addButton(self.tr("Re-initialize Project"), QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
+            msg_box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
             msg_box.exec()
 
             if msg_box.clickedButton() == migrate_button:
@@ -1972,8 +1860,12 @@ class MainWindow(QWidget):
 
         elif self.validator.validated_pdf_hash and old_page_count > 0 and old_page_count == new_page_count:
              self.write_debug("[INFO] PDF content changed without altering page structure. Auto-updating thumbnails.")
-             self.validator.compute_and_populate_pdf_details(self.project_model)
-             self.slide_table_manager.populate_slide_table_from_model()
+             QApplication.setOverrideCursor(Qt.WaitCursor)
+             try:
+                 self.validator.compute_and_populate_pdf_details(self.project_model)
+                 self.slide_table_manager.populate_slide_table_from_model()
+             finally:
+                 QApplication.restoreOverrideCursor()
              QMessageBox.information(self, self.tr("PDF Content Updated"),
                                      self.tr("The content of the PDF file was modified.\n"
                                      "Thumbnails have been automatically updated."))
@@ -1998,9 +1890,12 @@ class MainWindow(QWidget):
             self.project_model.slides = [Slide() for _ in range(page_count)]
             self._rescan_available_materials()
 
-            self.validator.compute_and_populate_pdf_details(self.project_model)
-
-            self.slide_table_manager.populate_slide_table_from_model()
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                self.validator.compute_and_populate_pdf_details(self.project_model)
+                self.slide_table_manager.populate_slide_table_from_model()
+            finally:
+                QApplication.restoreOverrideCursor()
             return True
         except Exception as e:
             QMessageBox.critical(self, self.tr("Error Initializing Project"), self.tr("Could not process the PDF file: {0}").format(e))

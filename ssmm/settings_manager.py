@@ -11,6 +11,39 @@ from ssmm.models import ProjectModel, ProjectParameters, Slide
 from ssmm import config
 from ssmm import dougameijin_importer
 from ssmm import pdf_utils
+from ssmm.media_utils import find_project_pdfs
+from ssmm.project_init import scan_materials
+
+# Option fields whose stored value is a key of the given config mapping. Settings
+# files written by older versions stored the display label instead.
+_KEYED_OPTION_FIELDS = {
+    'encoding_mode': config.ENCODING_MODES,
+    'encoding_pass': config.ENCODING_PASSES,
+    'normalize_loudness_mode': config.LOUDNORM_MODES,
+}
+_BOOL_FIELDS = ('normalize_loudness', 'add_watermark', 'watermark_tile', 'export_youtube_chapters',
+                'delete_temp_checkbox', 'append_duration_checkbox')
+_STR_FIELDS = ('watermark_text', 'filename_input')
+_HARDWARE_OPTIONS = {hw for hw_map in config.CODEC_MAP.values() for hw in hw_map}
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in ('true', 'yes', '1', 'on'):
+        return True
+    if isinstance(value, str) and value.strip().lower() in ('false', 'no', '0', 'off', ''):
+        return False
+    raise ValueError(value)
+
+
+def _clamped_int(value, low, high, default):
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return default
 
 class SettingsFileParseError(ValueError):
     pass
@@ -87,7 +120,7 @@ class SettingsManager(QObject):
             self._coerce_and_validate_parameters(project_model.parameters)
         return project_model
 
-    def _load_from_file(self, file_path: Path, project_folder_override: Path | None = None) -> ProjectModel | None:
+    def load_from_file(self, file_path: Path, project_folder_override: Path | None = None) -> ProjectModel | None:
         self.log_message.emit(f"[INFO] Attempting to load project settings from: {file_path}", 'app')
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -122,7 +155,7 @@ class SettingsManager(QObject):
             if not project_path_str or not Path(project_path_str).is_dir():
                  raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
             project_dir = Path(project_path_str)
-        pdf_files = list(project_dir.glob('*.[pP][dD][fF]'))
+        pdf_files = find_project_pdfs(project_dir)
         if not pdf_files:
             raise FileNotFoundError(f"No PDF file found in the project folder '{project_dir}'.")
         if len(pdf_files) > 1:
@@ -157,10 +190,7 @@ class SettingsManager(QObject):
         
         project_model.slides = [Slide() for _ in range(toml_slide_count)]
         
-        project_model.available_materials = sorted([
-            p.name for p in project_model.project_folder.iterdir()
-            if p.is_file() and p.suffix.lower() in config.SUPPORTED_FORMATS
-        ])
+        project_model.available_materials = scan_materials(project_model.project_folder)
 
         for idx, slide_settings in enumerate(loaded_slides_settings):
             if idx >= len(project_model.slides):
@@ -189,17 +219,23 @@ class SettingsManager(QObject):
                     f"[WARNING] Material '{material}' referenced by slide {idx + 1} was not found "
                     f"in the project folder; the slide will be left unassigned.", 'app')
 
-            slide.chapter_title = slide_settings.get("chapter_title", "")
-            slide.interval_to_next = slide_settings.get("interval_to_next", config.DEFAULT_SLIDE_INTERVAL)
-            slide.transition_to_next = slide_settings.get("transition_to_next", "None")
+            # Coerce hand-edited values into what the table widgets and the renderer accept.
+            slide.chapter_title = str(slide_settings.get("chapter_title", "") or "")
+            iv_low, iv_high = config.INTERVAL_RANGE
+            slide.interval_to_next = _clamped_int(slide_settings.get("interval_to_next", config.DEFAULT_SLIDE_INTERVAL),
+                                                  iv_low, iv_high, config.DEFAULT_SLIDE_INTERVAL)
+            transition = slide_settings.get("transition_to_next", "None")
+            slide.transition_to_next = transition if transition in config.TRANSITION_MAPPINGS else "None"
+            # Provisional; probing the material replaces this with the stream-based result.
             slide.is_video = slide.filename is not None and slide.filename.lower().endswith(config.SUPPORTED_VIDEO_FORMATS)
-            slide.selected_audio_stream_index = slide_settings.get("selected_audio_stream_index", 0)
+            slide.selected_audio_stream_index = _clamped_int(slide_settings.get("selected_audio_stream_index", 0), 0, 1 << 16, 0)
             
             slide.p_hash = slide_settings.get("p_hash")
             slide.thumbnail_b64 = slide_settings.get("thumbnail_b64")
 
             if slide.is_video:
-                slide.video_position = slide_settings.get("video_position", "Center")
+                position = slide_settings.get("video_position", "Center")
+                slide.video_position = position if position in config.VIDEO_POSITION_MAP else "Center"
                 # Clamp the PinP scale to its valid range and drop any effect tokens
                 # that are not recognized, so a hand-edited file cannot inject values
                 # the UI and renderer do not understand.
@@ -214,7 +250,7 @@ class SettingsManager(QObject):
                 else:
                     slide.video_effects = []
 
-        self.log_message.emit(f"[SUCCESS] Successfully loaded project settings.", 'app')
+        self.log_message.emit("[SUCCESS] Successfully loaded project settings.", 'app')
         return project_model
 
     @staticmethod
@@ -242,7 +278,29 @@ class SettingsManager(QObject):
                 f"({reason}); reset to default {default_value!r}.", 'app')
             setattr(params, field_name, default_value)
 
-        for int_field in ('fps', 'encoding_value', 'audio_channels'):
+        # Older files stored option labels; convert them to the keys used now.
+        for field_name, options in _KEYED_OPTION_FIELDS.items():
+            value = getattr(params, field_name)
+            if value not in options:
+                for key, label in options.items():
+                    if value == label:
+                        setattr(params, field_name, key)
+                        break
+
+        for bool_field in _BOOL_FIELDS:
+            try:
+                setattr(params, bool_field, _coerce_bool(getattr(params, bool_field)))
+            except ValueError:
+                reset(bool_field, 'not a boolean')
+
+        for str_field in _STR_FIELDS:
+            if not isinstance(getattr(params, str_field), str):
+                reset(str_field, 'not a string')
+
+        if params.hardware_encoding is not None and params.hardware_encoding not in _HARDWARE_OPTIONS:
+            reset('hardware_encoding', 'unknown hardware encoder')
+
+        for int_field in ('fps', 'encoding_value', 'audio_channels', 'watermark_opacity', 'watermark_fontsize'):
             try:
                 setattr(params, int_field, int(getattr(params, int_field)))
             except (ValueError, TypeError):
@@ -254,9 +312,9 @@ class SettingsManager(QObject):
             'fps': config.FPS_OPTIONS,
             'audio_bitrate': config.AUDIO_BITRATE_OPTIONS,
             'audio_sample_rate': config.AUDIO_SAMPLE_RATE_OPTIONS,
-            'encoding_mode': list(config.ENCODING_MODES.values()),
-            'encoding_pass': list(config.ENCODING_PASSES.values()),
-            'normalize_loudness_mode': list(config.LOUDNORM_MODES.values()),
+            'encoding_mode': list(config.ENCODING_MODES.keys()),
+            'encoding_pass': list(config.ENCODING_PASSES.keys()),
+            'normalize_loudness_mode': list(config.LOUDNORM_MODES.keys()),
             'watermark_color': list(config.WATERMARK_COLOR_OPTIONS_RGB.keys()),
             'watermark_rotation': list(config.WATERMARK_ROTATION_OPTIONS),
             'watermark_fontfamily': list(config.BUNDLED_FONTS.keys()),
@@ -274,8 +332,20 @@ class SettingsManager(QObject):
                 f"[{ch_low}, {ch_high}]; clamped to {clamped}.", 'app')
             params.audio_channels = clamped
 
-        # Clamp the quality/bitrate value to the range valid for the current mode.
-        if params.encoding_mode == config.ENCODING_MODES["QUALITY"]:
+        for field_name, (low, high) in (('watermark_opacity', config.WATERMARK_OPACITY_RANGE),
+                                         ('watermark_fontsize', config.WATERMARK_FONTSIZE_RANGE)):
+            value = getattr(params, field_name)
+            if not (low <= value <= high):
+                clamped = max(low, min(high, value))
+                self.log_message.emit(
+                    f"[WARNING] Loaded '{field_name}'={value} is out of range [{low}, {high}]; clamped to {clamped}.", 'app')
+                setattr(params, field_name, clamped)
+
+        # Clamp the quality/bitrate value to the range valid for the current mode
+        # (and, in quality mode, for the codec: MPEG-4 uses qscale 1-31).
+        if params.encoding_mode == "QUALITY" and params.codec == 'MPEG-4 Part 2':
+            low, high = config.ENCODING_MPEG4_QSCALE_RANGE
+        elif params.encoding_mode == "QUALITY":
             low, high = config.ENCODING_CRF_RANGE
         else:
             low, high = config.ENCODING_BITRATE_RANGE_KBPS

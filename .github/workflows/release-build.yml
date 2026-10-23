@@ -75,11 +75,6 @@ jobs:
           sips -z 1024 1024 resources/assets/app_icon.png --out resources/assets/app_icon.iconset/icon_512x512@2x.png
           iconutil -c icns resources/assets/app_icon.iconset -o resources/assets/app_icon.icns
 
-      - name: Ensure ffmpeg executable bits (macOS only)
-        if: runner.os == 'macOS'
-        run: |
-          chmod +x resources/ffmpeg/bin/ffmpeg resources/ffmpeg/bin/ffprobe 2>/dev/null || true
-
       # ---------- Build ----------
       - name: Build for Windows Installer (one-dir)
         if: runner.os == 'Windows'
@@ -90,7 +85,6 @@ jobs:
           --add-data "resources/assets;resources/assets"
           --add-data "resources/agif;resources/agif"
           --add-data "resources/fonts;resources/fonts"
-          --add-data "resources/ffmpeg;resources/ffmpeg"
           --add-data "resources/licenses;resources/licenses"
           --add-data "translations;translations"
           --collect-all PySide6.QtMultimedia
@@ -101,19 +95,20 @@ jobs:
         if: runner.os == 'Windows'
         run: move dist dist_for_installer
 
-      # NOTE: The Windows portable (one-file) EXE is no longer built here.
+      # NOTE: The Windows portable (one-dir ZIP) is not built here.
       # It is produced on demand by the manually-triggered
       # .github/workflows/portable-build.yml workflow.
 
-      - name: Build (macOS arm64 onefile)
+      # FFmpeg is not bundled: the app uses the FFmpeg installed on the user's
+      # machine so that its hardware encoders (NVENC/QSV/AMF/VideoToolbox) are used.
+      - name: Build (macOS arm64 one-dir .app)
         if: runner.os == 'macOS'
         run: >
-          pyinstaller --windowed --onefile --name "SSMM"
+          pyinstaller --windowed --onedir --name "SSMM"
           --icon resources/assets/app_icon.icns
           --add-data "resources/assets:resources/assets"
           --add-data "resources/agif:resources/agif"
           --add-data "resources/fonts:resources/fonts"
-          --add-data "resources/ffmpeg:resources/ffmpeg"
           --add-data "resources/licenses:resources/licenses"
           --add-data "translations:translations"
           --collect-all PySide6.QtMultimedia
@@ -159,8 +154,8 @@ jobs:
           # Get architecture from runner context
           ARCH=$(echo "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')
 
-          # Stage only the .app so the DMG does not also contain the bare onefile
-          # executable that --onefile leaves alongside SSMM.app in dist/.
+          # Stage only the .app so the DMG does not also contain the one-dir
+          # folder that PyInstaller leaves alongside SSMM.app in dist/.
           mkdir -p dmg_staging
           cp -R "dist/SSMM.app" dmg_staging/
 

@@ -10,7 +10,6 @@ calling pypdfium2 directly.
 """
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Optional, Tuple
 
 import pypdfium2 as pdfium

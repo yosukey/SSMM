@@ -5,7 +5,7 @@ import shutil
 import platform
 from pathlib import Path
 
-from PySide6.QtCore import QTranslator, QLocale, QLibraryInfo
+from PySide6.QtCore import QTranslator, QLibraryInfo
 
 from ssmm import app_settings
 
@@ -41,15 +41,38 @@ def install_translators(app):
 
     return installed
 
+def _platform_search_dirs() -> list[Path]:
+    """Well-known install locations that may be missing from the process PATH.
+
+    SSMM does not ship FFmpeg (a system build is used so that the hardware encoders
+    of the user's GPU are available), so it has to find an existing installation.
+    """
+    dirs: list[Path] = []
+    if sys.platform == 'darwin':
+        # A .app launched from Finder inherits launchd's minimal PATH, which omits
+        # Homebrew (Apple silicon / Intel) and MacPorts.
+        dirs += [Path('/opt/homebrew/bin'), Path('/usr/local/bin'), Path('/opt/local/bin')]
+    elif sys.platform.startswith('win'):
+        # winget (e.g. Gyan.FFmpeg) exposes the executables through these link
+        # folders. The PATH entry it adds only reaches newly started processes, so
+        # probing them lets an install made from the running app be detected
+        # without a restart.
+        local_appdata = os.environ.get('LOCALAPPDATA')
+        if local_appdata:
+            dirs.append(Path(local_appdata) / 'Microsoft' / 'WinGet' / 'Links')
+        program_files = os.environ.get('ProgramFiles')
+        if program_files:
+            dirs.append(Path(program_files) / 'WinGet' / 'Links')
+    return dirs
+
 def _find_ffmpeg_pair() -> tuple[Path, Path, str]:
     suffix = '.exe' if platform.system() == 'Windows' else ''
     ffmpeg_name = f'ffmpeg{suffix}'
     ffprobe_name = f'ffprobe{suffix}'
 
-    # 1. Prioritize user's local ffmpeg-bin directory
+    # 1. User's local ffmpeg-bin directory (explicit override).
     try:
-        user_home = Path.home()
-        user_dir = user_home / 'ffmpeg-bin'
+        user_dir = Path.home() / 'ffmpeg-bin'
         ffmpeg_path = user_dir / ffmpeg_name
         ffprobe_path = user_dir / ffprobe_name
         if ffmpeg_path.is_file() and ffprobe_path.is_file():
@@ -57,30 +80,19 @@ def _find_ffmpeg_pair() -> tuple[Path, Path, str]:
     except Exception:
         pass
 
-    # 2. Check system's PATH using shutil.which
+    # 2. The system PATH.
     ffmpeg_path_sys = shutil.which('ffmpeg')
     ffprobe_path_sys = shutil.which('ffprobe')
     if ffmpeg_path_sys and ffprobe_path_sys:
         return Path(ffmpeg_path_sys), Path(ffprobe_path_sys), 'system'
 
-    # 3. Check Homebrew paths on macOS if not found in PATH
-    if sys.platform == 'darwin':
-        # Potential Homebrew bin directories
-        homebrew_paths = ['/opt/homebrew/bin', '/usr/local/bin']
-        for h_path in homebrew_paths:
-            ffmpeg_path = Path(h_path) / ffmpeg_name
-            ffprobe_path = Path(h_path) / ffprobe_name
-            if ffmpeg_path.is_file() and ffprobe_path.is_file():
-                # Treated as a 'system' install
-                return ffmpeg_path, ffprobe_path, 'system'
+    # 3. Package-manager locations that may not be on PATH.
+    for directory in _platform_search_dirs():
+        ffmpeg_path = directory / ffmpeg_name
+        ffprobe_path = directory / ffprobe_name
+        if ffmpeg_path.is_file() and ffprobe_path.is_file():
+            return ffmpeg_path, ffprobe_path, 'system'
 
-    # 4. Fallback to bundled executable
-    bundled_dir = resolve_resource_path(Path('resources') / 'ffmpeg' / 'bin')
-    ffmpeg_path_bundle = bundled_dir / ffmpeg_name
-    ffprobe_path_bundle = bundled_dir / ffprobe_name
-    if ffmpeg_path_bundle.is_file() and ffprobe_path_bundle.is_file():
-        return ffmpeg_path_bundle, ffprobe_path_bundle, 'bundled'
-        
     raise FileNotFoundError("Could not find a matching pair of ffmpeg and ffprobe.")
 
 def _get_ffmpeg_pair_info() -> tuple[Path, Path, str]:
@@ -110,11 +122,3 @@ def get_ffmpeg_source() -> str:
         return source
     except FileNotFoundError:
         return 'not_found'
-
-def bundled_ffmpeg_exists() -> bool:
-    # Resolution requires BOTH ffmpeg and ffprobe, so report a bundled fallback only
-    # when both are present; checking ffmpeg alone lets callers believe a bundle
-    # exists while resolution then fails on the missing ffprobe.
-    suffix = '.exe' if platform.system() == 'Windows' else ''
-    bundled_dir = resolve_resource_path(Path('resources') / 'ffmpeg' / 'bin')
-    return (bundled_dir / f'ffmpeg{suffix}').is_file() and (bundled_dir / f'ffprobe{suffix}').is_file()

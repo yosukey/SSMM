@@ -19,7 +19,7 @@ def get_version():
         )
         version = git_process.stdout.strip().lstrip('v')
         return version
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, OSError):
         return 'local-dev'
 
 APP_VERSION = get_version()
@@ -34,6 +34,17 @@ FFMPEG_INSTALL_TIMEOUT_S = 600
 # Indigo brand accent, rendered onto the dark waveform canvas (theme.MEDIA_BACKDROP).
 WAVEFORM_COLOR = "#8b97e6"
 PROCESS_START_TIMEOUT_MS = 10000
+LOUDNORM_ANALYSIS_TIMEOUT_S = 600
+UPDATE_CHECK_TIMEOUT_S = 5
+# Keep the in-app debug log bounded during long renders.
+DEBUG_LOG_MAX_LINES = 20000
+# Characters of FFmpeg output kept for error reports when output is not captured.
+FFMPEG_ERROR_TAIL_CHARS = 20000
+# Files up to this size are fingerprinted with a full SHA-256; larger media files
+# use a sampled fingerprint (size + head/middle/tail blocks) so that probing a
+# multi-GB video does not stall the UI.
+FULL_HASH_MAX_BYTES = 64 * 1024 * 1024
+SAMPLED_HASH_BLOCK_BYTES = 4 * 1024 * 1024
 FFMPEG_ENCODE_TIMEOUT_MS = 36000000
 
 
@@ -56,6 +67,9 @@ WATERMARK_COLOR_OPTIONS_RGB = {
 # Rotation values are stored as the combo's userData, not the display text.
 WATERMARK_ROTATION_OPTIONS = ("None", "45", "-45")
 
+# The keys are what the project model and settings.toml store; the values are the
+# (English) labels shown in the UI. Older settings files stored the labels, so the
+# loader still accepts them and converts them to the keys.
 ENCODING_MODES = {
     "QUALITY": "Quality (CQP/CRF)",
     "VBR": "Bitrate (VBR)",
@@ -65,13 +79,27 @@ ENCODING_PASSES = {
     "ONE_PASS": "1-Pass",
     "TWO_PASS": "2-Pass"
 }
-
-# Loudness-normalization modes. The values are stored verbatim in the project TOML
-# and compared at render time, so keep them as the single source of truth.
 LOUDNORM_MODES = {
     "ONE_PASS": "1-Pass (Faster)",
     "TWO_PASS": "2-Pass (Recommended)"
 }
+
+# Loudness target shared by the 1-pass filter, the 2-pass analysis and the 2-pass
+# apply step (EBU R128 programme loudness).
+LOUDNORM_TARGET_I = -23.0
+LOUDNORM_TARGET_LRA = 7.0
+LOUDNORM_TARGET_TP = -2.0
+
+# Encoders that implement FFmpeg's generic two-pass mode (-pass 1/2 + -passlogfile).
+TWO_PASS_ENCODERS = frozenset({"libx264", "libx265", "libaom-av1", "mpeg4"})
+# NVENC has no -pass support, but performs an internal two-pass encode with
+# -multipass, so a 2-Pass selection is mapped to that in a single run.
+MULTIPASS_ENCODERS = frozenset({"h264_nvenc", "hevc_nvenc", "av1_nvenc"})
+
+# Intermediate segments keep uncompressed audio so that concatenation never inserts
+# AAC encoder-delay gaps; AAC is encoded once, in the final step.
+INTERMEDIATE_CONTAINER = ".mov"
+INTERMEDIATE_AUDIO_CODEC = "pcm_s16le"
 
 SUPPORTED_AUDIO_FORMATS = ('.mp3', '.flac', '.aac', '.wav')
 SUPPORTED_VIDEO_FORMATS = ('.mp4', '.avi', '.mov')
@@ -92,6 +120,12 @@ ENCODER_TEST_FRAMERATE = "30"
 ENCODER_TEST_DURATION_S = 1
 
 PDF_THUMBNAIL_ZOOM_FACTOR = 0.25
+# Points-to-pixels scale used when rendering pages for p-hash and thumbnails.
+PDF_DETAIL_RENDER_SCALE = 1.0
+PDF_THUMBNAIL_HEIGHT = 300
+INTERVAL_RANGE = (0, 300)
+WATERMARK_OPACITY_RANGE = (0, 100)
+WATERMARK_FONTSIZE_RANGE = (1, 100)
 PINP_PREVIEW_UPDATE_DELAY_MS = 300
 DURATION_RECALC_DELAY_MS = 500
 SILENT_DURATION_RANGE = (1, 100)

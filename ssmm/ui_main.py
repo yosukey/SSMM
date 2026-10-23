@@ -234,9 +234,9 @@ class Ui_MainWindow(object):
 
         MainWindow.normalize_loudness_mode_label = QLabel(MainWindow.tr("Mode:"))
         MainWindow.normalize_loudness_mode_combo = QComboBox()
-        # Items are stored verbatim as the parameter value (saved to TOML, compared in
-        # video_processing), so keep them English and untranslated.
-        MainWindow.normalize_loudness_mode_combo.addItems(list(config.LOUDNORM_MODES.values()))
+        # The item data is the parameter value (a config.LOUDNORM_MODES key).
+        for mode_key, mode_label in config.LOUDNORM_MODES.items():
+            MainWindow.normalize_loudness_mode_combo.addItem(mode_label, mode_key)
         
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(MainWindow.normalize_loudness_mode_combo)
@@ -433,6 +433,7 @@ class Ui_MainWindow(object):
         MainWindow.debug_tab = QWidget()
         MainWindow.debug_text = QPlainTextEdit()
         MainWindow.debug_text.setReadOnly(True)
+        MainWindow.debug_text.setMaximumBlockCount(config.DEBUG_LOG_MAX_LINES)
         MainWindow.debug_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         debug_button_layout = QHBoxLayout()
@@ -487,37 +488,14 @@ class Ui_MainWindow(object):
 
         licenses_layout.addSpacerItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
-        # Compliance label with links
-        MainWindow.ffmpeg_compliance_label = QLabel()
-        MainWindow.ffmpeg_compliance_label.setTextFormat(Qt.RichText)
-        MainWindow.ffmpeg_compliance_label.setOpenExternalLinks(True)
-        MainWindow.ffmpeg_compliance_label.setWordWrap(True)
-        licenses_layout.addWidget(MainWindow.ffmpeg_compliance_label)
+        # FFmpeg is not distributed with SSMM; a system installation is used so the
+        # hardware encoders of the user's GPU are available.
+        MainWindow.ffmpeg_notice_label = QLabel()
+        MainWindow.ffmpeg_notice_label.setTextFormat(Qt.RichText)
+        MainWindow.ffmpeg_notice_label.setOpenExternalLinks(True)
+        MainWindow.ffmpeg_notice_label.setWordWrap(True)
+        licenses_layout.addWidget(MainWindow.ffmpeg_notice_label)
 
-        # Notice for when system FFmpeg is used
-        MainWindow.system_ffmpeg_notice_label = QLabel()
-        MainWindow.system_ffmpeg_notice_label.setTextFormat(Qt.RichText)
-        MainWindow.system_ffmpeg_notice_label.setWordWrap(True)
-        licenses_layout.addWidget(MainWindow.system_ffmpeg_notice_label)
-
-        # Header for bundled FFmpeg license
-        MainWindow.ffmpeg_license_header = QLabel(MainWindow.tr("<b>Bundled FFmpeg License (LGPL v2.1)</b>"))
-        licenses_layout.addWidget(MainWindow.ffmpeg_license_header)
-
-        # Text area for LGPL.txt
-        MainWindow.ffmpeg_license_text_edit = QTextEdit()
-        MainWindow.ffmpeg_license_text_edit.setReadOnly(True)
-        licenses_layout.addWidget(MainWindow.ffmpeg_license_text_edit)
-
-        # Header for bundled FFmpeg build config
-        MainWindow.ffmpeg_build_config_header = QLabel(MainWindow.tr("<b>Bundled FFmpeg Build Configuration</b>"))
-        licenses_layout.addWidget(MainWindow.ffmpeg_build_config_header)
-
-        # Text area for ffmpeg_build_config.txt
-        MainWindow.ffmpeg_build_config_text_edit = QTextEdit()
-        MainWindow.ffmpeg_build_config_text_edit.setReadOnly(True)
-        licenses_layout.addWidget(MainWindow.ffmpeg_build_config_text_edit)
-        
         MainWindow.tabs.addTab(MainWindow.licenses_tab, MainWindow.tr("Licenses"))
 
 
