@@ -250,9 +250,10 @@ class VideoProcessor(QObject):
 
             # Resolve the output directory first; output_folder may be None, and the
             # path below must use the fallback rather than dereferencing None. Make it
-            # absolute: concat lists resolve relative entries against the list's own
-            # folder, and Python < 3.12 keeps mkdtemp() results relative.
-            output_dir = (project_model.output_folder or Path(".")).resolve()
+            # absolute (absolute(), not resolve(), which would turn a mapped Windows
+            # drive into a UNC path): concat lists resolve relative entries against
+            # the list's own folder, and Python < 3.12 keeps mkdtemp() results relative.
+            output_dir = (project_model.output_folder or Path(".")).absolute()
             final_video_path = output_dir / f"{project_model.parameters.filename_input}.mp4"
             # Unique temp name so a second render (or a stale leftover) targeting the
             # same output does not clobber this in-progress file.
@@ -325,7 +326,7 @@ class VideoProcessor(QObject):
             if not base_filename:
                 base_filename = project_model.project_folder.name
 
-            output_dir = (project_model.output_folder or Path(".")).resolve()
+            output_dir = (project_model.output_folder or Path(".")).absolute()
             random_id = uuid.uuid4().hex[:8]
             preview_filename = f"{base_filename}-preview-slide{slide_index+1}-{random_id}.mp4"
             final_preview_path = output_dir / preview_filename

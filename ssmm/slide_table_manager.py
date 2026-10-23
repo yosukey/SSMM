@@ -540,43 +540,6 @@ class SlideTableManager(QObject):
         self.project_model.total_duration = total_duration
         self.total_duration_label.setText(self.tr("Total Estimated Duration: {0}").format(self._format_duration(total_duration, include_msec=False)))
     
-    def apply_transition_to_all(self, transition: str):
-        if not self.project_model.slides: return
-
-        with block_signals(self.table):
-            for i in range(len(self.project_model.slides) - 1):
-                slide = self.project_model.slides[i]
-                slide.transition_to_next = transition
-            
-                widget_container = self.table.cellWidget(i, self.COL_TRANSITION)
-                if widget_container:
-                    combo_box = widget_container.findChild(QComboBox)
-                    if combo_box:
-                        with block_signals(combo_box):
-                            combo_box.setCurrentText(transition)
-        
-        QMessageBox.information(self.table, self.tr("Success"), self.tr("Transition '{0}' has been applied to all applicable slides.").format(transition))
-        self.model_changed.emit()
-
-    def apply_interval_to_all(self, interval: int):
-        if not self.project_model.slides: return
-  
-        with block_signals(self.table):
-            for i in range(len(self.project_model.slides) - 1):
-                slide = self.project_model.slides[i]
-                slide.interval_to_next = interval
-            
-                widget_container = self.table.cellWidget(i, self.COL_INTERVAL)
-                if widget_container:
-                    spin_box = widget_container.findChild(QSpinBox)
-                    if spin_box:
-                        with block_signals(spin_box):
-                            spin_box.setValue(interval)
-        
-        self.calculate_and_display_total_duration()
-        QMessageBox.information(self.table, self.tr("Success"), self.tr("Interval of {0} seconds has been applied to all applicable slides.").format(interval))
-        self.model_changed.emit()
-        
     def _format_duration(self, seconds, include_msec=True):
         if not isinstance(seconds, (int, float)) or seconds < 0: return ""
         if seconds == 0: return "0s"

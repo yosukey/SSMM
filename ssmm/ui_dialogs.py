@@ -762,6 +762,10 @@ class MediaPlayerDialog(QDialog):
             layout.addWidget(self._waveform, stretch=1)
             self._waveform_loader = _WaveformJob(self.material_path, 600, 140, self)
             self._waveform_loader.ready.connect(self._on_waveform_ready)
+            # Also stop ffmpeg when the dialog is destroyed without close/reject.
+            # cancel() only touches Python state, so it is safe during destruction.
+            loader = self._waveform_loader
+            self.destroyed.connect(lambda *_: loader.cancel())
             self._waveform_loader.start()
 
         # --- Player ---

@@ -102,6 +102,12 @@ class UIStateManager:
             if not mw.ffmpeg_installed:
                 enabled.add(install_action)
 
+        # Open Recent loads another project, which is only allowed while idle.
+        recent_menu = getattr(mw, 'recent_menu', None)
+        if recent_menu is not None:
+            recent_menu.setEnabled(new_state in (AppState.AWAITING_PROJECT, AppState.PREPARE_TO_VALIDATE,
+                                                 AppState.READY_TO_VALIDATE, AppState.VALIDATED))
+
         for control in all_controls:
             if control is not None:
                 is_enabled = control in enabled
@@ -138,12 +144,19 @@ class UIStateManager:
 
     def sync_model_to_ui(self, params: ProjectParameters):
         try:
+            # Before the startup encoder test the codec list only holds a placeholder;
+            # nothing the UI shows then may be written back into the model.
+            combo = self.main_window.codec_combo
+            encoders_ready = combo.count() > 0 and combo.itemText(0) != "No Encoders Found"
+            stored_codec = params.codec
             codec_to_set = params.codec
             if self.main_window.codec_combo.findText(codec_to_set) != -1:
                 self.main_window.codec_combo.setCurrentText(codec_to_set)
             elif self.main_window.codec_combo.count() > 0 and self.main_window.codec_combo.itemText(0) != "No Encoders Found":
                 self.main_window.codec_combo.setCurrentIndex(0)
                 codec_to_set = self.main_window.codec_combo.currentText()
+                # The stored codec has no working encoder on this machine.
+                params.codec = codec_to_set
 
             self.main_window.update_hardware_encoding_options(codec_to_set)
 
@@ -153,6 +166,8 @@ class UIStateManager:
                 self.main_window.hardware_encoding_combo.setCurrentIndex(index)
             elif self.main_window.hardware_encoding_combo.count() > 0:
                 self.main_window.hardware_encoding_combo.setCurrentIndex(0)
+                if encoders_ready:
+                    params.hardware_encoding = self.main_window.hardware_encoding_combo.currentData()
 
             # Combos for keyed options carry the key as item data.
             def select_data(combo, value):
@@ -166,15 +181,19 @@ class UIStateManager:
             select_data(self.main_window.pass_combo, params.encoding_pass)
             self.main_window.update_encoding_options()
             forced_mode = self.main_window.encoding_mode_combo.currentData()
-            if forced_mode == params.encoding_mode:
+            same_scale = (self.main_window._value_scale(stored_codec, params.encoding_mode)
+                          == self.main_window._value_scale(codec_to_set, params.encoding_mode))
+            if forced_mode == params.encoding_mode and same_scale:
                 self.main_window.value_spin.setValue(params.encoding_value)
-            else:
-                # The selected encoder cannot use the stored mode (VideoToolbox has no
-                # quality mode): keep the model in line with what the UI now shows
-                # instead of letting the next sync silently swap in the new default.
+            elif encoders_ready:
+                # The encoder cannot use the stored mode (VideoToolbox has no quality
+                # mode), or a codec fallback changed the value's scale: keep the model
+                # in line with what the UI now shows instead of letting the next sync
+                # silently swap in the new default.
                 params.encoding_mode = forced_mode
                 params.encoding_value = self.main_window.value_spin.value()
-            params.encoding_pass = self.main_window.pass_combo.currentData() or params.encoding_pass
+            if encoders_ready:
+                params.encoding_pass = self.main_window.pass_combo.currentData() or params.encoding_pass
 
             self.main_window.resolution_combo.setCurrentText(params.resolution)
             self.main_window.fps_combo.setCurrentText(str(params.fps))
