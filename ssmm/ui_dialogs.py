@@ -5,9 +5,9 @@ from pathlib import Path
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QSpinBox,
                                QDialogButtonBox, QGroupBox, QFormLayout, QComboBox,
                                QCheckBox, QWidget, QHBoxLayout, QScrollArea, QPushButton,
-                               QTableWidget, QTableWidgetItem, QHeaderView, QStyle, QMessageBox,
+                               QTableWidget, QHeaderView, QStyle, QMessageBox,
                                QSlider, QToolButton)
-from PySide6.QtCore import Qt, QPoint, Slot, Signal, QUrl, QSize, QThread
+from PySide6.QtCore import Qt, Slot, Signal, QUrl, QSize, QThread
 from PySide6.QtGui import (QTextCursor, QPixmap, QImage, QPainter, QFont, QColor, QPen,
                            QPainterPath, QGuiApplication, QIcon, QPalette)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput

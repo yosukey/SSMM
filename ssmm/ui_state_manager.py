@@ -1,6 +1,6 @@
 # ui_state_manager.py
 from PySide6.QtCore import Qt, QCoreApplication
-from ssmm.models import AppState, ProjectModel, ProjectParameters
+from ssmm.models import AppState, ProjectParameters
 
 class UIStateManager:
 
@@ -135,7 +135,7 @@ class UIStateManager:
             status_message = QCoreApplication.translate("MainWindow", "Cancelling process...")
 
         elif new_state == AppState.ERROR:
-            status_message = self.main_window._ffmpeg_missing_message()
+            status_message = self.main_window.ffmpeg_missing_message()
             self.main_window.show_gallery_action.setEnabled(True)
             if hasattr(self.main_window, 'install_ffmpeg_action'):
                 self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
@@ -162,7 +162,7 @@ class UIStateManager:
                 self.main_window.codec_combo.setCurrentIndex(0)
                 codec_to_set = self.main_window.codec_combo.currentText()
 
-            self.main_window._update_hardware_encoding_options(codec_to_set)
+            self.main_window.update_hardware_encoding_options(codec_to_set)
 
             hardware_to_set = params.hardware_encoding
             index = self.main_window.hardware_encoding_combo.findData(hardware_to_set)
@@ -171,14 +171,21 @@ class UIStateManager:
             elif self.main_window.hardware_encoding_combo.count() > 0:
                 self.main_window.hardware_encoding_combo.setCurrentIndex(0)
 
-            encoding_mode_to_set = params.encoding_mode
-            self.main_window.encoding_mode_combo.setCurrentText(encoding_mode_to_set)
+            # Combos for keyed options carry the key as item data.
+            def select_data(combo, value):
+                index = combo.findData(value)
+                if index != -1:
+                    combo.setCurrentIndex(index)
+
+            select_data(self.main_window.encoding_mode_combo, params.encoding_mode)
+            # Set the pass before refreshing the options: the refresh forces 1-Pass
+            # for encoders without two-pass support.
+            select_data(self.main_window.pass_combo, params.encoding_pass)
             self.main_window.update_encoding_options()
             self.main_window.value_spin.setValue(params.encoding_value)
 
             self.main_window.resolution_combo.setCurrentText(params.resolution)
             self.main_window.fps_combo.setCurrentText(str(params.fps))
-            self.main_window.pass_combo.setCurrentText(params.encoding_pass)
             self.main_window.audio_bitrate_combo.setCurrentText(params.audio_bitrate)
             self.main_window.audio_sample_rate_combo.setCurrentText(params.audio_sample_rate)
             ch_index = self.main_window.audio_channels_combo.findData(params.audio_channels, Qt.UserRole, Qt.MatchExactly)
@@ -190,7 +197,7 @@ class UIStateManager:
             if ch_index != -1:
                 self.main_window.audio_channels_combo.setCurrentIndex(ch_index)
             self.main_window.normalize_loudness_checkbox.setChecked(params.normalize_loudness)
-            self.main_window.normalize_loudness_mode_combo.setCurrentText(params.normalize_loudness_mode)
+            select_data(self.main_window.normalize_loudness_mode_combo, params.normalize_loudness_mode)
             self.main_window.watermark_color_combo.setCurrentText(params.watermark_color)
             self.main_window.watermark_fontsize_spin.setValue(params.watermark_fontsize)
             self.main_window.watermark_fontfamily_combo.setCurrentText(params.watermark_fontfamily)

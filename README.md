@@ -61,7 +61,8 @@ Ready-to-run applications for **Windows and macOS** are available in the reposit
 Please be aware of the following limitations regarding these applications:
 
 * **Security Warning on First Launch**: The application is not digitally signed, so your operating system will likely show a security warning. You will need to manually approve it to run.
-* **Slower Startup & Larger File Size**: These applications are built using PyInstaller. This bundles Python and all dependencies into a single file, which makes the file size larger and the initial startup a bit slower as the app unpacks itself.
+* **Larger Download Size**: These applications are built with PyInstaller in one-folder (one-dir) mode, so Python and all dependencies are shipped alongside the executable. The Windows portable package is a ZIP of that folder; extract it and run `SSMM.exe`.
+* **FFmpeg Is Not Included**: FFmpeg is not bundled. Install it separately (see step 3 below or the app's **Tools → Install FFmpeg...** menu). Using the FFmpeg build installed on your computer lets SSMM use your GPU's hardware encoders.
 
 ### Running with Python 🐍
 
@@ -76,7 +77,9 @@ Please be aware of the following limitations regarding these applications:
    - **Linux**: Use your distro’s package manager (e.g., `sudo apt install ffmpeg`) or a static build.
    
    The app will auto-detect FFmpeg in this order:
-   [1] `~/ffmpeg-bin` → [2] system `PATH` → [3] common Homebrew paths (macOS: `/opt/homebrew/bin`, `/usr/local/bin`) → [4] the FFmpeg bundled with the packaged app (release builds only)
+   [1] `~/ffmpeg-bin` → [2] system `PATH` → [3] package-manager locations that may be missing from `PATH` (macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`; Windows: the winget `Links` folders, so an FFmpeg installed from the running app is found without a restart)
+
+   FFmpeg is not bundled with SSMM. A full build (e.g. `Gyan.FFmpeg` on Windows, Homebrew's `ffmpeg` on macOS) includes the NVIDIA/Intel/AMD/Apple hardware encoders that SSMM tests at startup.
 
 > Tip: If you want a portable setup, place `ffmpeg` and `ffprobe` in `~/ffmpeg-bin/`.
 
@@ -130,7 +133,8 @@ You can additionally **import a [DougaMeijin](https://github.com/yosukey/DougaMe
    - **Silent**: Render the page as a still with a silent segment of the given slide duration.
    - **Audio**: Combine the page image with the selected audio stream to make a segment.
    - **Video**: Overlay the chosen video as PinP on top of the page image, with optional effects (e.g., circle mask or chroma key) at your chosen position/scale.
-   - Segments are then concatenated; optional **EBU R128 loudness normalization** and **watermark** are applied; final movie is written using your selected codec/encoder and pass/mode.
+   - Each segment is encoded with your selected codec/encoder and pass/mode; its audio is kept uncompressed (PCM) so segments join without gaps. The **watermark** is burned into every segment.
+   - Segments are then concatenated and the audio is encoded to AAC once, with optional **EBU R128 loudness normalization** (target -23 LUFS) and embedded chapters.
 
 ---
 
@@ -139,6 +143,7 @@ You can additionally **import a [DougaMeijin](https://github.com/yosukey/DougaMe
 - **Resolution** (e.g., `1920x1080`) and **FPS** (e.g., 30)
 - **Codec / Encoder** (software `libx264`/`libx265`/`libaom-av1`/`mpeg4`, or available HW encoders)
 - **Mode**: Quality (CQP/CRF) / VBR / CBR
+- **Pass**: 1-pass / 2-pass (bitrate modes only). 2-pass uses FFmpeg's two-pass encoding for the software encoders and NVENC's internal multipass; it is unavailable for QSV/AMF/VideoToolbox.
 - **Audio**: bitrate (e.g., `160k`), sample rate (e.g., `32000`), channels (1/2)
 - **Loudness normalization**: off / 1-pass / 2-pass
 - **Watermark**: text, opacity, color, font family/size, rotation, tiling
@@ -229,7 +234,7 @@ While these file extensions are supported, they can contain audio and video enco
 ### Third-Party Components & Licenses
 
 SSMM is distributed as a self-contained application that bundles or links the
-components below. All of them are permissive licenses, or copyleft licenses
+components below (FFmpeg is not among them; it is installed separately by the user). All of them are permissive licenses, or copyleft licenses
 (LGPL) whose obligations are satisfied by dynamic linking together with the
 notices and source references provided in the application's "Licenses" tab.
 This keeps the distributed application consistent with SSMM's own MIT license.
@@ -245,7 +250,6 @@ This keeps the distributed application consistent with SSMM's own MIT license.
 | NumPy | Numerical computing | BSD-3-Clause |
 | toml | TOML parsing | MIT |
 | packaging | Version handling | Apache-2.0 / BSD-2-Clause |
-| FFmpeg (bundled in release builds) | Audio/video encoding | LGPL-2.1 |
 | Noto Sans fonts (bundled) | Text rendering | SIL Open Font License 1.1 |
 
 > Note: SSMM previously used PyMuPDF (AGPL-3.0) for PDF handling. It has been

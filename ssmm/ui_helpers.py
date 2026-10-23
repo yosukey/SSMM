@@ -11,6 +11,7 @@ from PySide6.QtGui import QImage, QPixmap
 
 from ssmm import config
 from ssmm import pdf_utils
+from ssmm.media_utils import display_aspect_ratio
 from ssmm.models import Slide, ProjectParameters
 from ssmm.utils import resolve_resource_path, get_ffmpeg_path
 from ssmm.watermark import render_watermark_overlay
@@ -129,31 +130,10 @@ def calculate_pinp_geometry(slide: Slide, output_width: int, output_height: int)
     if not slide.is_video:
         return None
 
-    video_width = slide.tech_info.get('width', 0)
-    video_height = slide.tech_info.get('height', 0)
-    dar_str = slide.tech_info.get('dar')
-
-    rotation = slide.tech_info.get('rotate')
-    is_rotated_90 = rotation in ["90", "270", "-90"]
-    if is_rotated_90:
-        video_width, video_height = video_height, video_width
-
-    if video_height <= 0:
+    # Same aspect computation as the renderer (DAR metadata and rotation aware).
+    aspect_ratio = display_aspect_ratio(slide.tech_info)
+    if aspect_ratio is None:
         return None
-
-    aspect_ratio = video_width / video_height
-    # Use the DAR for aspect ratio, ignoring the undefined '0:1' and zero numerators.
-    if dar_str and ':' in dar_str and dar_str != '0:1':
-        try:
-            num, den = map(int, dar_str.split(':'))
-            if num > 0 and den > 0:
-                aspect_ratio = num / den
-                if is_rotated_90:
-                    # DAR describes the un-rotated (coded) frame; invert it to match
-                    # the rotated display orientation so the PinP box is not stretched.
-                    aspect_ratio = 1.0 / aspect_ratio
-        except (ValueError, TypeError):
-            pass
 
     scale_percent = slide.video_scale / 100.0
     final_height_float = output_height * scale_percent
@@ -199,6 +179,36 @@ def pil_to_qimage(pil_im: Image.Image) -> QImage:
     qimage = QImage()
     qimage.loadFromData(buffer.getvalue(), "PNG")
     return qimage
+
+def letterbox_to_output(image: Image.Image, output_width: int, output_height: int) -> Image.Image:
+    """Fit ``image`` into a canvas with the output aspect ratio, padding with black.
+
+    This mirrors the renderer's scale+pad step, so overlays drawn in output-frame
+    coordinates (PinP box, watermark) land where they will appear in the video even
+    when the PDF page and the output resolution have different aspect ratios.
+    """
+    img_w, img_h = image.size
+    if img_w <= 0 or img_h <= 0 or output_width <= 0 or output_height <= 0:
+        return image
+    target_aspect = output_width / output_height
+    if abs(img_w / img_h - target_aspect) <= config.PDF_ASPECT_RATIO_TOLERANCE:
+        return image
+    if img_w / img_h > target_aspect:
+        canvas_w, canvas_h = img_w, max(1, round(img_w / target_aspect))
+    else:
+        canvas_w, canvas_h = max(1, round(img_h * target_aspect)), img_h
+    mode = image.mode if image.mode in ("RGB", "RGBA") else "RGBA"
+    canvas = Image.new(mode, (canvas_w, canvas_h), (0, 0, 0, 255) if mode == "RGBA" else (0, 0, 0))
+    canvas.paste(image, ((canvas_w - img_w) // 2, (canvas_h - img_h) // 2))
+    return canvas
+
+def letterbox_pixmap(base_pixmap: QPixmap, output_width: int, output_height: int) -> QPixmap:
+    if base_pixmap.isNull() or base_pixmap.height() == 0 or output_height == 0:
+        return base_pixmap
+    if abs(base_pixmap.width() / base_pixmap.height() - output_width / output_height) <= config.PDF_ASPECT_RATIO_TOLERANCE:
+        return base_pixmap
+    pil_image = letterbox_to_output(qimage_to_pil(base_pixmap.toImage()), output_width, output_height)
+    return QPixmap.fromImage(pil_to_qimage(pil_image))
 
 def _create_preview_image(base_image: Image.Image, slide: Slide, output_width: int, output_height: int) -> Image.Image:
     pinp_geometry = calculate_pinp_geometry(slide, output_width, output_height)
@@ -254,6 +264,7 @@ def create_pinp_preview_for_report(base_slide_image: Optional[Image.Image], slid
         preview_width = config.PINP_VALIDATION_PREVIEW_WIDTH
         
         if base_slide_image:
+            base_slide_image = letterbox_to_output(base_slide_image, output_width, output_height)
             base_w, base_h = base_slide_image.size
             preview_height = int(preview_width * (base_h / base_w))
             image = base_slide_image.resize((preview_width, preview_height), Image.Resampling.LANCZOS).convert("RGBA")
