@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import os
 from pathlib import Path
 from typing import Optional, Tuple
@@ -511,6 +512,7 @@ class ProjectValidator:
             if self._is_canceled: return messages, page_count, file_hashes_snapshot
             
             self._check_parameter_compatibility(project_model.parameters, messages)
+            self._check_intermediate_container_support(project_model.parameters, messages)
             if self._is_canceled: return messages, page_count, file_hashes_snapshot
             if project_model.parameters.export_youtube_chapters:
                 self._validate_youtube_chapters(project_model, messages)
@@ -984,11 +986,47 @@ class ProjectValidator:
             )
             messages.add_project_error(msg)
 
-        encoder = config.CODEC_MAP.get(params.codec, {}).get(params.hardware_encoding) if params.hardware_encoding else config.SOFTWARE_CODEC_MAP.get(params.codec)
+        encoder = self._resolve_encoder(params)
         if (params.encoding_pass == "TWO_PASS" and params.encoding_mode != "QUALITY" and encoder
                 and encoder not in config.TWO_PASS_ENCODERS and encoder not in config.MULTIPASS_ENCODERS):
             messages.add_project_notice(QCoreApplication.translate("ProjectValidator",
                 "The selected encoder '{0}' does not support 2-pass encoding; it will encode in a single pass.").format(html.escape(encoder)))
+
+    @staticmethod
+    def _resolve_encoder(params: "ProjectParameters") -> Optional[str]:
+        if params.hardware_encoding:
+            return config.CODEC_MAP.get(params.codec, {}).get(params.hardware_encoding)
+        return config.SOFTWARE_CODEC_MAP.get(params.codec)
+
+    def _check_intermediate_container_support(self, params: "ProjectParameters", messages: ValidationMessages):
+        # AV1 segments are written as MP4 with PCM audio ('ipcm'), which older FFmpeg
+        # builds (before 6.0) cannot mux. Test it up front so the render does not fail
+        # on its first segment.
+        encoder = self._resolve_encoder(params) or ""
+        if 'av1' not in encoder:
+            return
+        try:
+            ffmpeg_path = str(get_ffmpeg_path())
+        except FileNotFoundError:
+            return
+        with tempfile.TemporaryDirectory(prefix="ssmm-probe-") as tmp:
+            probe = Path(tmp) / f"probe{config.INTERMEDIATE_CONTAINER_AV1}"
+            try:
+                result = subprocess.run(
+                    [ffmpeg_path, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+                     '-t', '0.1', '-c:a', config.INTERMEDIATE_AUDIO_CODEC, str(probe)],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    timeout=config.ENCODER_TEST_TIMEOUT_S, creationflags=config.SUBPROCESS_CREATION_FLAGS)
+                supported = result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                supported = False
+        if not supported:
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator",
+                "The installed FFmpeg cannot write the intermediate files needed for AV1.<br><br>"
+                "<b>[Cause]</b><br>"
+                "AV1 segments are stored as MP4 with uncompressed audio, which requires FFmpeg 6.0 or later.<br><br>"
+                "<b>[Action]</b><br>"
+                "Update FFmpeg, or select a different codec in the 'Basic' tab."))
 
     def _validate_youtube_chapters(self, project_model: ProjectModel, messages: ValidationMessages):
         if not any(s.chapter_title for s in project_model.slides):

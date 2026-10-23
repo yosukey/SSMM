@@ -152,12 +152,12 @@ You can **import a [DougaMeijin](https://github.com/yosukey/DougaMeijin) project
 **Basic**
 - **Resolution**: 3840x2160, 1920x1080, 1280x720, 960x540, 426x240 (16:9) or 1280x960, 960x720, 640x480 (4:3)
 - **FPS**: 60, 30, 24, 10, 5, 3
-- **Codec**: H.264, H.265/HEVC, AV1, MPEG-4 Part 2 (only codecs with a working encoder are listed)
+- **Codec**: H.264, H.265/HEVC, AV1, MPEG-4 Part 2 (only codecs with a working encoder are listed). AV1 requires FFmpeg 6.0 or later; validation checks this.
 - **Hardware Encoding**: `None` (software: `libx264` / `libx265` / `libaom-av1` / `mpeg4`) or a tested hardware encoder (NVIDIA, Intel, AMD, Apple VideoToolbox)
 
 **Video Options**
 - **Encoding Mode**: Quality (CRF/CQP; MPEG-4 uses qscale 1-31) / Bitrate VBR / Bitrate CBR. VideoToolbox supports the bitrate modes only.
-- **Pass**: 1-Pass / 2-Pass (bitrate modes only). 2-Pass uses FFmpeg's two-pass encoding for the software encoders and NVENC's internal multipass; it is not available for QSV, AMF and VideoToolbox.
+- **Pass**: 1-Pass / 2-Pass (bitrate modes only). 2-Pass runs a real two-pass encode with the software encoders (x265 through its own stats file) and uses NVENC's internal multipass; it is not available for QSV, AMF and VideoToolbox.
 - **Chapters**: chapters are embedded into the MP4 whenever a slide has a chapter title. **Export chapter file for YouTube** additionally writes `<video name>-chapter-for-youtube.txt`; YouTube's rules are checked during validation (the first chapter on slide 1, at least three chapters, each at least 10 seconds).
 
 **Audio Options**
