@@ -5,12 +5,46 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QStandardPaths, QObject, Signal
 import hashlib
-from dataclasses import asdict
+from dataclasses import asdict, fields
+import re
 
 from ssmm.models import ProjectModel, ProjectParameters, Slide
 from ssmm import config
 from ssmm import dougameijin_importer
 from ssmm import pdf_utils
+from ssmm.media_utils import find_project_pdfs
+from ssmm.project_init import scan_materials
+
+# Option fields whose stored value is a key of the given config mapping. Settings
+# files written by older versions stored the display label instead.
+_KEYED_OPTION_FIELDS = {
+    'encoding_mode': config.ENCODING_MODES,
+    'encoding_pass': config.ENCODING_PASSES,
+    'normalize_loudness_mode': config.LOUDNORM_MODES,
+}
+_BOOL_FIELDS = ('normalize_loudness', 'add_watermark', 'watermark_tile', 'export_youtube_chapters',
+                'delete_temp_checkbox', 'append_duration_checkbox')
+_STR_FIELDS = ('watermark_text', 'filename_input')
+_HARDWARE_OPTIONS = {hw for hw_map in config.CODEC_MAP.values() for hw in hw_map}
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in ('true', 'yes', '1', 'on'):
+        return True
+    if isinstance(value, str) and value.strip().lower() in ('false', 'no', '0', 'off', ''):
+        return False
+    raise ValueError(value)
+
+
+def _clamped_int(value, low, high, default):
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return default
 
 class SettingsFileParseError(ValueError):
     pass
@@ -87,7 +121,7 @@ class SettingsManager(QObject):
             self._coerce_and_validate_parameters(project_model.parameters)
         return project_model
 
-    def _load_from_file(self, file_path: Path, project_folder_override: Path | None = None) -> ProjectModel | None:
+    def load_from_file(self, file_path: Path, project_folder_override: Path | None = None) -> ProjectModel | None:
         self.log_message.emit(f"[INFO] Attempting to load project settings from: {file_path}", 'app')
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -95,13 +129,21 @@ class SettingsManager(QObject):
         except (toml.TomlDecodeError, UnicodeDecodeError) as e:
             raise SettingsFileParseError(f"The settings file '{file_path.name}' is not a valid TOML file or is corrupt: {e}")
 
-        validation_info = data.get("validation_info", {})
+        # Hand-edited files may give any section or value the wrong shape; treat a
+        # malformed section as absent instead of failing the whole load.
+        def section(name, kind):
+            value = data.get(name)
+            return value if isinstance(value, kind) else kind()
+
+        validation_info = section("validation_info", dict)
         cached_pdf_hash = validation_info.get("pdf_file_hash")
+        if not isinstance(cached_pdf_hash, str):
+            cached_pdf_hash = None
         if cached_pdf_hash:
             self.main_window.validator.validated_pdf_hash = cached_pdf_hash
             self.log_message.emit(f"[INFO] Loaded cached PDF hash: {cached_pdf_hash[:10]}...", 'app')
 
-        loaded_params_dict = data.get("parameters", {})
+        loaded_params_dict = section("parameters", dict)
 
         stored_hash = loaded_params_dict.get('integrity_hash')
         if stored_hash:
@@ -112,17 +154,19 @@ class SettingsManager(QObject):
             except Exception as e:
                 self.log_message.emit(f"[WARNING] Could not verify settings file integrity: {e}", 'app')
 
-        paths = data.get("paths", {})
+        paths = section("paths", dict)
         if project_folder_override is not None:
             project_dir = Path(project_folder_override)
             if not project_dir.is_dir():
                 raise FileNotFoundError(f"Project folder '{project_dir}' could not be found.")
         else:
-            project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") else paths.get("project_folder")
+            project_path_str = str(file_path.parent) if paths.get("project_folder_is_self") is True else paths.get("project_folder")
+            if not isinstance(project_path_str, str):
+                project_path_str = None
             if not project_path_str or not Path(project_path_str).is_dir():
                  raise FileNotFoundError(f"Project folder '{project_path_str}' defined in settings.toml could not be found.")
             project_dir = Path(project_path_str)
-        pdf_files = list(project_dir.glob('*.[pP][dD][fF]'))
+        pdf_files = find_project_pdfs(project_dir)
         if not pdf_files:
             raise FileNotFoundError(f"No PDF file found in the project folder '{project_dir}'.")
         if len(pdf_files) > 1:
@@ -130,7 +174,8 @@ class SettingsManager(QObject):
 
         pdf_path = pdf_files[0]
 
-        toml_slide_count = len(data.get("slides", []))
+        loaded_slides_settings = [sl if isinstance(sl, dict) else {} for sl in section("slides", list)]
+        toml_slide_count = len(loaded_slides_settings)
 
         try:
             pdf_page_count = pdf_utils.page_count(pdf_path)
@@ -144,7 +189,7 @@ class SettingsManager(QObject):
         project_model.project_folder = project_dir
 
         output_path_str = paths.get("output_folder")
-        if output_path_str and Path(output_path_str).is_dir():
+        if isinstance(output_path_str, str) and output_path_str and Path(output_path_str).is_dir():
             project_model.output_folder = Path(output_path_str)
 
         project_model.parameters = ProjectParameters()
@@ -153,14 +198,10 @@ class SettingsManager(QObject):
                 setattr(project_model.parameters, key, value)
         self._coerce_and_validate_parameters(project_model.parameters)
 
-        loaded_slides_settings = data.get("slides", [])
         
         project_model.slides = [Slide() for _ in range(toml_slide_count)]
         
-        project_model.available_materials = sorted([
-            p.name for p in project_model.project_folder.iterdir()
-            if p.is_file() and p.suffix.lower() in config.SUPPORTED_FORMATS
-        ])
+        project_model.available_materials = scan_materials(project_model.project_folder)
 
         for idx, slide_settings in enumerate(loaded_slides_settings):
             if idx >= len(project_model.slides):
@@ -168,6 +209,8 @@ class SettingsManager(QObject):
 
             slide = project_model.slides[idx]
             material = slide_settings.get("material")
+            if not isinstance(material, str):
+                material = None
 
             if material == config.SILENT_MATERIAL_NAME:
                 slide.filename = config.SILENT_MATERIAL_NAME
@@ -189,17 +232,26 @@ class SettingsManager(QObject):
                     f"[WARNING] Material '{material}' referenced by slide {idx + 1} was not found "
                     f"in the project folder; the slide will be left unassigned.", 'app')
 
-            slide.chapter_title = slide_settings.get("chapter_title", "")
-            slide.interval_to_next = slide_settings.get("interval_to_next", config.DEFAULT_SLIDE_INTERVAL)
-            slide.transition_to_next = slide_settings.get("transition_to_next", "None")
+            # Coerce hand-edited values into what the table widgets and the renderer accept.
+            slide.chapter_title = str(slide_settings.get("chapter_title", "") or "")
+            iv_low, iv_high = config.INTERVAL_RANGE
+            slide.interval_to_next = _clamped_int(slide_settings.get("interval_to_next", config.DEFAULT_SLIDE_INTERVAL),
+                                                  iv_low, iv_high, config.DEFAULT_SLIDE_INTERVAL)
+            transition = slide_settings.get("transition_to_next", "None")
+            slide.transition_to_next = transition if isinstance(transition, str) and transition in config.TRANSITION_MAPPINGS else "None"
+            # Provisional; probing the material replaces this with the stream-based result.
             slide.is_video = slide.filename is not None and slide.filename.lower().endswith(config.SUPPORTED_VIDEO_FORMATS)
-            slide.selected_audio_stream_index = slide_settings.get("selected_audio_stream_index", 0)
+            slide.selected_audio_stream_index = _clamped_int(slide_settings.get("selected_audio_stream_index", 0), 0, 1 << 16, 0)
             
-            slide.p_hash = slide_settings.get("p_hash")
-            slide.thumbnail_b64 = slide_settings.get("thumbnail_b64")
+            # Invalid cached values are dropped; they are recomputed from the PDF.
+            p_hash = slide_settings.get("p_hash")
+            slide.p_hash = p_hash if isinstance(p_hash, str) and re.fullmatch(r"[0-9a-fA-F]+", p_hash) else None
+            thumbnail = slide_settings.get("thumbnail_b64")
+            slide.thumbnail_b64 = thumbnail if isinstance(thumbnail, str) and thumbnail else None
 
             if slide.is_video:
-                slide.video_position = slide_settings.get("video_position", "Center")
+                position = slide_settings.get("video_position", "Center")
+                slide.video_position = position if isinstance(position, str) and position in config.VIDEO_POSITION_MAP else "Center"
                 # Clamp the PinP scale to its valid range and drop any effect tokens
                 # that are not recognized, so a hand-edited file cannot inject values
                 # the UI and renderer do not understand.
@@ -210,11 +262,11 @@ class SettingsManager(QObject):
                     slide.video_scale = config.DEFAULT_VIDEO_SCALE
                 raw_effects = slide_settings.get("video_effects", [])
                 if isinstance(raw_effects, list):
-                    slide.video_effects = [e for e in raw_effects if e in config.VIDEO_EFFECT_MAP]
+                    slide.video_effects = [e for e in raw_effects if isinstance(e, str) and e in config.VIDEO_EFFECT_MAP and e != "None"]
                 else:
                     slide.video_effects = []
 
-        self.log_message.emit(f"[SUCCESS] Successfully loaded project settings.", 'app')
+        self.log_message.emit("[SUCCESS] Successfully loaded project settings.", 'app')
         return project_model
 
     @staticmethod
@@ -242,7 +294,36 @@ class SettingsManager(QObject):
                 f"({reason}); reset to default {default_value!r}.", 'app')
             setattr(params, field_name, default_value)
 
-        for int_field in ('fps', 'encoding_value', 'audio_channels'):
+        # Every parameter is a single scalar (or None); a list/table in its place
+        # cannot be interpreted and would break the lookups below.
+        for f in fields(params):
+            value = getattr(params, f.name)
+            if f.name != 'available_encoders' and value is not None and not isinstance(value, (str, int, float, bool)):
+                reset(f.name, 'not a single value')
+
+        # Older files stored option labels; convert them to the keys used now.
+        for field_name, options in _KEYED_OPTION_FIELDS.items():
+            value = getattr(params, field_name)
+            if value not in options:
+                for key, label in options.items():
+                    if value == label:
+                        setattr(params, field_name, key)
+                        break
+
+        for bool_field in _BOOL_FIELDS:
+            try:
+                setattr(params, bool_field, _coerce_bool(getattr(params, bool_field)))
+            except ValueError:
+                reset(bool_field, 'not a boolean')
+
+        for str_field in _STR_FIELDS:
+            if not isinstance(getattr(params, str_field), str):
+                reset(str_field, 'not a string')
+
+        if params.hardware_encoding is not None and params.hardware_encoding not in _HARDWARE_OPTIONS:
+            reset('hardware_encoding', 'unknown hardware encoder')
+
+        for int_field in ('fps', 'encoding_value', 'audio_channels', 'watermark_opacity', 'watermark_fontsize'):
             try:
                 setattr(params, int_field, int(getattr(params, int_field)))
             except (ValueError, TypeError):
@@ -254,15 +335,27 @@ class SettingsManager(QObject):
             'fps': config.FPS_OPTIONS,
             'audio_bitrate': config.AUDIO_BITRATE_OPTIONS,
             'audio_sample_rate': config.AUDIO_SAMPLE_RATE_OPTIONS,
-            'encoding_mode': list(config.ENCODING_MODES.values()),
-            'encoding_pass': list(config.ENCODING_PASSES.values()),
-            'normalize_loudness_mode': list(config.LOUDNORM_MODES.values()),
+            'encoding_mode': list(config.ENCODING_MODES.keys()),
+            'encoding_pass': list(config.ENCODING_PASSES.keys()),
+            'normalize_loudness_mode': list(config.LOUDNORM_MODES.keys()),
             'watermark_color': list(config.WATERMARK_COLOR_OPTIONS_RGB.keys()),
             'watermark_rotation': list(config.WATERMARK_ROTATION_OPTIONS),
             'watermark_fontfamily': list(config.BUNDLED_FONTS.keys()),
         }
         for field_name, allowed in enum_checks.items():
-            if getattr(params, field_name) not in allowed:
+            value = getattr(params, field_name)
+            if value in allowed:
+                continue
+            # Hand-edited files often carry the right value in the wrong form, e.g.
+            # audio_sample_rate = 48000 instead of "48000", or "1920X1080".
+            candidate = str(value).strip()
+            if field_name == 'resolution':
+                candidate = candidate.lower()
+            for option in allowed:
+                if str(option) == candidate:
+                    setattr(params, field_name, option)
+                    break
+            else:
                 reset(field_name, 'not an allowed value')
 
         # Clamp audio_channels to the valid range so it maps to a selectable combo entry.
@@ -274,8 +367,20 @@ class SettingsManager(QObject):
                 f"[{ch_low}, {ch_high}]; clamped to {clamped}.", 'app')
             params.audio_channels = clamped
 
-        # Clamp the quality/bitrate value to the range valid for the current mode.
-        if params.encoding_mode == config.ENCODING_MODES["QUALITY"]:
+        for field_name, (low, high) in (('watermark_opacity', config.WATERMARK_OPACITY_RANGE),
+                                         ('watermark_fontsize', config.WATERMARK_FONTSIZE_RANGE)):
+            value = getattr(params, field_name)
+            if not (low <= value <= high):
+                clamped = max(low, min(high, value))
+                self.log_message.emit(
+                    f"[WARNING] Loaded '{field_name}'={value} is out of range [{low}, {high}]; clamped to {clamped}.", 'app')
+                setattr(params, field_name, clamped)
+
+        # Clamp the quality/bitrate value to the range valid for the current mode
+        # (and, in quality mode, for the codec: MPEG-4 uses qscale 1-31).
+        if params.encoding_mode == "QUALITY" and params.codec == 'MPEG-4 Part 2':
+            low, high = config.ENCODING_MPEG4_QSCALE_RANGE
+        elif params.encoding_mode == "QUALITY":
             low, high = config.ENCODING_CRF_RANGE
         else:
             low, high = config.ENCODING_BITRATE_RANGE_KBPS
@@ -329,7 +434,7 @@ class SettingsManager(QObject):
             return self._perform_save(file_path_to_save, project_model)
         return False
 
-    def _perform_save(self, file_path: Path, project_model: ProjectModel) -> bool:
+    def _perform_save(self, file_path: Path, project_model: ProjectModel, notify: bool = True) -> bool:
         paths_data = {}
         
         if project_model.project_folder:
@@ -423,5 +528,7 @@ class SettingsManager(QObject):
             QMessageBox.critical(self.main_window, self.tr("Error"), self.tr("Failed to save settings: {0}").format(e))
             return False
 
-        QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
+        if notify:
+            QMessageBox.information(self.main_window, self.tr("Success"), self.tr("Project settings saved to:\n{0}").format(file_path))
+        self.log_message.emit(f"[INFO] Project settings saved to: {file_path}", 'app')
         return True

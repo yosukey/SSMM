@@ -14,7 +14,9 @@ if is_pyinstaller_bundle:
         else:
             pyi_splash.update_text("Loading application, please wait...")
 
-    except (ImportError, KeyError):
+    # RuntimeError/ConnectionError: the bundle was built without --splash (the module
+    # is importable but not initialized) or the splash IPC is gone; start without it.
+    except (ImportError, KeyError, RuntimeError, ConnectionError):
         pass
 
 from PySide6.QtWidgets import QApplication, QSplashScreen
@@ -77,7 +79,7 @@ class PyiSplashScreenManager:
             try:
                 import pyi_splash
                 pyi_splash.close()
-            except (ImportError, KeyError, RuntimeError):
+            except (ImportError, KeyError, RuntimeError, OSError):
                 pass
 
 if __name__ == "__main__":
@@ -177,7 +179,7 @@ if __name__ == "__main__":
             try:
                 import pyi_splash
                 pyi_splash.close()
-            except (ImportError, KeyError, RuntimeError) as splash_e:
+            except (ImportError, KeyError, RuntimeError, OSError) as splash_e:
                 original_stderr.write(f"Additionally, failed to close PyInstaller splash screen: {splash_e}\n")
 
     finally:

@@ -2,6 +2,7 @@
 from PySide6.QtCore import QObject, Signal, Slot
 from pathlib import Path
 from ssmm.models import ProjectModel
+from ssmm import project_init
 from ssmm.validator import ProjectValidator
 from ssmm.settings_manager import SettingsManager, SettingsFileParseError
 
@@ -14,6 +15,8 @@ class EncoderTestWorker(QObject):
 
     def run(self):
         try:
+            # The encoder test honours the validator's cancel flag; clear any stale request.
+            self.validator.start_validation()
             encoders_map, logs = self.validator.get_functional_encoders()
             self.finished.emit(encoders_map, logs)
         except Exception as e:
@@ -40,10 +43,13 @@ class ProjectSetupWorker(QObject):
                 self.log_message.emit(text, source)
 
             self.validator.log = worker_logger
+            # A cancel request left over from an earlier validation must not cut the
+            # material probing of this load short.
+            self.validator.start_validation()
             project_model = None
 
             def setup_from_toml(toml_file: Path, folder_override: Path | None) -> ProjectModel | None:
-                model = self.settings_manager._load_from_file(
+                model = self.settings_manager.load_from_file(
                     toml_file, project_folder_override=folder_override)
                 if model:
                     self.validator.probe_and_cache_all_materials(model)
@@ -56,9 +62,8 @@ class ProjectSetupWorker(QObject):
 
             def setup_from_folder(folder: Path) -> ProjectModel:
                 model = ProjectModel(project_folder=folder)
-                main_window = self.settings_manager.main_window
-                main_window.initialize_project_from_pdf(model)
-                main_window._automap_materials(model)
+                project_init.initialize_project_from_pdf(model)
+                project_init.automap_materials(model)
                 self.validator.probe_and_cache_all_materials(model)
                 self.validator.compute_and_populate_pdf_details(model)
                 return model
@@ -89,9 +94,8 @@ class ProjectSetupWorker(QObject):
             self.finished.emit(project_model)
 
         except Exception as e:
-            title = e.__class__.__name__
-            message = f"An error occurred during project setup: {e}"
-            self.error.emit(title, message)
+            # The window shows a translated title; the exception type goes to the log.
+            self.error.emit(e.__class__.__name__, str(e))
         finally:
             self.validator.log = original_logger
             try:
@@ -127,9 +131,10 @@ class ValidationWorker(QObject):
             try:
                 self.validator.log = worker_logger
 
+                # Reset the cancel flag before any cancellable step runs.
+                self.validator.start_validation()
                 self.validator.probe_and_cache_all_materials(self.model)
 
-                self.validator.start_validation()
                 messages, page_count, snapshot = self.validator.validate(self.model, self.encoders_map)
                 
                 if self.validator.is_canceled():
