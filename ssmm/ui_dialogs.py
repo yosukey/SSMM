@@ -1,13 +1,15 @@
 # ui_dialogs.py
 import base64
+import subprocess
+import threading
 import imagehash
 from pathlib import Path
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QSpinBox,
                                QDialogButtonBox, QGroupBox, QFormLayout, QComboBox,
                                QCheckBox, QWidget, QHBoxLayout, QScrollArea, QPushButton,
-                               QTableWidget, QTableWidgetItem, QHeaderView, QStyle, QMessageBox,
+                               QTableWidget, QHeaderView, QStyle, QMessageBox,
                                QSlider, QToolButton)
-from PySide6.QtCore import Qt, QPoint, Slot, Signal, QUrl, QSize, QThread
+from PySide6.QtCore import Qt, QObject, Slot, Signal, QUrl, QSize
 from PySide6.QtGui import (QTextCursor, QPixmap, QImage, QPainter, QFont, QColor, QPen,
                            QPainterPath, QGuiApplication, QIcon, QPalette)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -17,7 +19,7 @@ from ssmm import config
 from ssmm import theme as app_theme
 from ssmm.models import Slide
 from ssmm.ui_main import wrap_cell_widget
-from ssmm.ui_helpers import generate_waveform_png_bytes
+from ssmm.ui_helpers import waveform_command
 
 COL_NEW_THUMB = 0
 COL_SOURCE_COMBO = 1
@@ -681,22 +683,57 @@ class WaveformWidget(QWidget):
         super().mouseMoveEvent(event)
 
 
-class _WaveformLoader(QThread):
-    # Generates the audio waveform off the GUI thread so opening the player does not
-    # freeze the UI while ffmpeg decodes (up to WAVEFORM_GEN_TIMEOUT_S). It emits raw
-    # PNG bytes (or None); the QPixmap is built on the GUI thread by the receiver,
-    # since QPixmap must not be created off the GUI thread.
+class _WaveformJob(QObject):
+    """Generates the audio waveform without blocking the GUI thread.
+
+    ffmpeg runs on a daemon thread, so a slow decode can neither freeze the player
+    nor block quitting, and cancel() kills the ffmpeg process when the player is
+    closed. The PNG bytes (or None) arrive through a queued signal; the QPixmap is
+    built on the GUI thread by the receiver.
+    """
     ready = Signal(object)
 
     def __init__(self, material_path, width, height, parent=None):
         super().__init__(parent)
-        self._path = material_path
-        self._width = width
-        self._height = height
+        self._command = waveform_command(material_path, width, height)
+        self._process = None
+        self._canceled = False
+        self._lock = threading.Lock()
 
-    def run(self):
-        png_bytes = generate_waveform_png_bytes(self._path, self._width, self._height)
-        self.ready.emit(png_bytes)
+    def start(self):
+        threading.Thread(target=self._run, name="ssmm-waveform", daemon=True).start()
+
+    def cancel(self):
+        with self._lock:
+            self._canceled = True
+            if self._process is not None and self._process.poll() is None:
+                self._process.kill()
+
+    def _run(self):
+        png_bytes = None
+        if self._command is not None:
+            with self._lock:
+                if self._canceled:
+                    return
+                try:
+                    self._process = subprocess.Popen(self._command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                                     creationflags=config.SUBPROCESS_CREATION_FLAGS)
+                except OSError:
+                    self._process = None
+            if self._process is not None:
+                try:
+                    output, _ = self._process.communicate(timeout=config.WAVEFORM_GEN_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    output, _ = self._process.communicate()
+                if self._process.returncode == 0 and output:
+                    png_bytes = output
+        if self._canceled:
+            return
+        try:
+            self.ready.emit(png_bytes)
+        except RuntimeError:
+            pass  # the player was closed and its job object deleted meanwhile
 
 
 class MediaPlayerDialog(QDialog):
@@ -719,15 +756,16 @@ class MediaPlayerDialog(QDialog):
             layout.addWidget(self._video_widget, stretch=1)
         else:
             # Show the widget immediately with a "generating" placeholder and fill in
-            # the waveform when the background loader finishes (see _WaveformLoader).
+            # the waveform when the background job finishes (see _WaveformJob).
             self._waveform = WaveformWidget(None, self)
             self._waveform.seekRequested.connect(self._on_waveform_seek)
             layout.addWidget(self._waveform, stretch=1)
-            # Parent to the (long-lived) window, not this dialog, so the thread outlives
-            # a quick dialog close instead of being destroyed while still running.
-            self._waveform_loader = _WaveformLoader(self.material_path, 600, 140, parent or self)
+            self._waveform_loader = _WaveformJob(self.material_path, 600, 140, self)
             self._waveform_loader.ready.connect(self._on_waveform_ready)
-            self._waveform_loader.finished.connect(self._waveform_loader.deleteLater)
+            # Also stop ffmpeg when the dialog is destroyed without close/reject.
+            # cancel() only touches Python state, so it is safe during destruction.
+            loader = self._waveform_loader
+            self.destroyed.connect(lambda *_: loader.cancel())
             self._waveform_loader.start()
 
         # --- Player ---
@@ -876,6 +914,8 @@ class MediaPlayerDialog(QDialog):
             )
 
     def _cleanup(self):
+        if self._waveform_loader is not None:
+            self._waveform_loader.cancel()
         self._player.stop()
         self._player.setSource(QUrl())
 

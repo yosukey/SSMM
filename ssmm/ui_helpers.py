@@ -7,25 +7,23 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtCore import QBuffer, QIODevice
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 
 from ssmm import config
 from ssmm import pdf_utils
+from ssmm.media_utils import display_aspect_ratio
 from ssmm.models import Slide, ProjectParameters
 from ssmm.utils import resolve_resource_path, get_ffmpeg_path
 from ssmm.watermark import render_watermark_overlay
 
 
-def generate_waveform_png_bytes(audio_path: Path, width: int, height: int) -> Optional[bytes]:
-    # Thread-safe: runs ffmpeg and returns raw PNG bytes without touching any GUI
-    # object, so it can be called from a worker thread. QPixmap must NOT be created
-    # off the GUI thread, so the caller builds the pixmap from these bytes itself.
+def waveform_command(audio_path: Path, width: int, height: int) -> Optional[list[str]]:
+    """FFmpeg command that writes a waveform PNG of ``audio_path`` to stdout."""
     try:
         ffmpeg_path = get_ffmpeg_path()
     except Exception:
         return None
-
-    cmd = [
+    return [
         str(ffmpeg_path),
         '-v', 'error',
         '-i', str(audio_path),
@@ -35,6 +33,15 @@ def generate_waveform_png_bytes(audio_path: Path, width: int, height: int) -> Op
         '-f', 'image2pipe',
         '-',
     ]
+
+
+def generate_waveform_png_bytes(audio_path: Path, width: int, height: int) -> Optional[bytes]:
+    # Thread-safe: runs ffmpeg and returns raw PNG bytes without touching any GUI
+    # object, so it can be called from a worker thread. QPixmap must NOT be created
+    # off the GUI thread, so the caller builds the pixmap from these bytes itself.
+    cmd = waveform_command(audio_path, width, height)
+    if cmd is None:
+        return None
     try:
         result = subprocess.run(
             cmd,
@@ -129,31 +136,10 @@ def calculate_pinp_geometry(slide: Slide, output_width: int, output_height: int)
     if not slide.is_video:
         return None
 
-    video_width = slide.tech_info.get('width', 0)
-    video_height = slide.tech_info.get('height', 0)
-    dar_str = slide.tech_info.get('dar')
-
-    rotation = slide.tech_info.get('rotate')
-    is_rotated_90 = rotation in ["90", "270", "-90"]
-    if is_rotated_90:
-        video_width, video_height = video_height, video_width
-
-    if video_height <= 0:
+    # Same aspect computation as the renderer (DAR metadata and rotation aware).
+    aspect_ratio = display_aspect_ratio(slide.tech_info)
+    if aspect_ratio is None:
         return None
-
-    aspect_ratio = video_width / video_height
-    # Use the DAR for aspect ratio, ignoring the undefined '0:1' and zero numerators.
-    if dar_str and ':' in dar_str and dar_str != '0:1':
-        try:
-            num, den = map(int, dar_str.split(':'))
-            if num > 0 and den > 0:
-                aspect_ratio = num / den
-                if is_rotated_90:
-                    # DAR describes the un-rotated (coded) frame; invert it to match
-                    # the rotated display orientation so the PinP box is not stretched.
-                    aspect_ratio = 1.0 / aspect_ratio
-        except (ValueError, TypeError):
-            pass
 
     scale_percent = slide.video_scale / 100.0
     final_height_float = output_height * scale_percent
@@ -200,6 +186,55 @@ def pil_to_qimage(pil_im: Image.Image) -> QImage:
     qimage.loadFromData(buffer.getvalue(), "PNG")
     return qimage
 
+def letterbox_to_output(image: Image.Image, output_width: int, output_height: int) -> Image.Image:
+    """Fit ``image`` into a canvas with the output aspect ratio, padding with black.
+
+    This mirrors the renderer's scale+pad step, so overlays drawn in output-frame
+    coordinates (PinP box, watermark) land where they will appear in the video even
+    when the PDF page and the output resolution have different aspect ratios.
+    """
+    img_w, img_h = image.size
+    if img_w <= 0 or img_h <= 0 or output_width <= 0 or output_height <= 0:
+        return image
+    target_aspect = output_width / output_height
+    if abs(img_w / img_h - target_aspect) <= config.PDF_ASPECT_RATIO_TOLERANCE:
+        return image
+    if img_w / img_h > target_aspect:
+        canvas_w, canvas_h = img_w, max(1, round(img_w / target_aspect))
+    else:
+        canvas_w, canvas_h = max(1, round(img_h * target_aspect)), img_h
+    mode = image.mode if image.mode in ("RGB", "RGBA") else "RGBA"
+    canvas = Image.new(mode, (canvas_w, canvas_h), (0, 0, 0, 255) if mode == "RGBA" else (0, 0, 0))
+    canvas.paste(image, ((canvas_w - img_w) // 2, (canvas_h - img_h) // 2))
+    return canvas
+
+def letterbox_pixmap(base_pixmap: QPixmap, output_width: int, output_height: int) -> QPixmap:
+    """QPixmap counterpart of letterbox_to_output (same canvas size and placement)."""
+    if base_pixmap.isNull() or base_pixmap.height() == 0 or output_height == 0:
+        return base_pixmap
+    img_w, img_h = base_pixmap.width(), base_pixmap.height()
+    target_aspect = output_width / output_height
+    if abs(img_w / img_h - target_aspect) <= config.PDF_ASPECT_RATIO_TOLERANCE:
+        return base_pixmap
+    if img_w / img_h > target_aspect:
+        canvas_w, canvas_h = img_w, max(1, round(img_w / target_aspect))
+    else:
+        canvas_w, canvas_h = max(1, round(img_h * target_aspect)), img_h
+    # Composite with QPainter: no PIL/PNG round trip, which took seconds for a
+    # page rendered at 4K output width.
+    canvas = QPixmap(canvas_w, canvas_h)
+    canvas.fill(QColor("black"))
+    painter = QPainter(canvas)
+    painter.drawPixmap((canvas_w - img_w) // 2, (canvas_h - img_h) // 2, base_pixmap)
+    painter.end()
+    return canvas
+
+def fitted_page_width(page_width: float, page_height: float, output_width: int, output_height: int) -> int:
+    """Render width at which a page fits inside the output frame (as the renderer scales it)."""
+    if page_width <= 0 or page_height <= 0:
+        return output_width
+    return max(1, min(output_width, round(output_height * page_width / page_height)))
+
 def _create_preview_image(base_image: Image.Image, slide: Slide, output_width: int, output_height: int) -> Image.Image:
     pinp_geometry = calculate_pinp_geometry(slide, output_width, output_height)
     if not pinp_geometry:
@@ -243,9 +278,13 @@ def superimpose_watermark(base_pixmap: QPixmap, params: ProjectParameters) -> QP
         overlay = render_watermark_overlay(params, base_pixmap.width(), base_pixmap.height())
         if overlay is None:
             return base_pixmap
-        pil_image = qimage_to_pil(base_pixmap.toImage())
-        pil_image.alpha_composite(overlay)
-        return QPixmap.fromImage(pil_to_qimage(pil_image))
+        data = overlay.tobytes("raw", "RGBA")
+        overlay_image = QImage(data, overlay.width, overlay.height, overlay.width * 4, QImage.Format_RGBA8888)
+        result = QPixmap(base_pixmap)
+        painter = QPainter(result)
+        painter.drawImage(0, 0, overlay_image)  # 'data' stays referenced until here
+        painter.end()
+        return result
     except Exception:
         return base_pixmap
 
@@ -254,6 +293,7 @@ def create_pinp_preview_for_report(base_slide_image: Optional[Image.Image], slid
         preview_width = config.PINP_VALIDATION_PREVIEW_WIDTH
         
         if base_slide_image:
+            base_slide_image = letterbox_to_output(base_slide_image, output_width, output_height)
             base_w, base_h = base_slide_image.size
             preview_height = int(preview_width * (base_h / base_w))
             image = base_slide_image.resize((preview_width, preview_height), Image.Resampling.LANCZOS).convert("RGBA")

@@ -1,8 +1,13 @@
-PySide6
+# PySide6 6.12.0 leaks a reference to True on every Signal.emit(); on Python 3.11 and
+# older (where True is not immortal) the process aborts once the count reaches zero.
+PySide6<6.12; python_version < "3.12"
+PySide6; python_version >= "3.12"
 pypdfium2
 pillow>=9.2.0
 toml
 pyqtdarktheme>=2.1.0
+# Imported directly for the "System Default" theme (also a dependency of pyqtdarktheme).
+darkdetect
 psutil
 imagehash
 numpy

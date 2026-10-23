@@ -1,6 +1,6 @@
 # ui_state_manager.py
 from PySide6.QtCore import Qt, QCoreApplication
-from ssmm.models import AppState, ProjectModel, ProjectParameters
+from ssmm.models import AppState, ProjectParameters
 
 class UIStateManager:
 
@@ -27,119 +27,108 @@ class UIStateManager:
         return "info"
 
     def update_ui_for_state(self, new_state: AppState):
+        mw = self.main_window
+        install_action = getattr(mw, 'install_ffmpeg_action', None)
         all_controls = [
-            self.main_window.select_project_folder_button, self.main_window.validation_button, self.main_window.preview_button,
-            self.main_window.create_video_button, self.main_window.select_output_button, self.main_window.parameters_tabs,
-            self.main_window.reset_parameters_button, self.main_window.slide_table,
-            self.main_window.select_all_button, self.main_window.select_video_button, self.main_window.select_audio_button,
-            self.main_window.delete_temp_checkbox, self.main_window.append_duration_checkbox, self.main_window.filename_input,
-            self.main_window.load_settings_action, self.main_window.save_settings_action,
-            self.main_window.import_dmj_action,
-            # install_ffmpeg_action may be absent; default to None so the disable loop skips it.
-            getattr(self.main_window, 'install_ffmpeg_action', None), self.main_window.show_gallery_action
+            mw.select_project_folder_button, mw.validation_button, mw.preview_button,
+            mw.create_video_button, mw.select_output_button, mw.parameters_tabs,
+            mw.reset_parameters_button, mw.slide_table,
+            mw.select_all_button, mw.select_video_button, mw.select_audio_button,
+            mw.delete_temp_checkbox, mw.append_duration_checkbox, mw.filename_input,
+            mw.load_settings_action, mw.save_settings_action,
+            mw.import_dmj_action, install_action, mw.show_gallery_action,
+            mw.cancel_button,
         ]
-        debug_controls = [self.main_window.clear_debug_button, self.main_window.export_debug_button, self.main_window.verbose_debug_checkbox]
+        project_controls = [
+            mw.select_project_folder_button, mw.load_settings_action, mw.import_dmj_action,
+            mw.show_gallery_action, mw.select_output_button, mw.slide_table,
+            mw.select_all_button, mw.select_video_button, mw.select_audio_button,
+            mw.delete_temp_checkbox, mw.append_duration_checkbox, mw.filename_input,
+            mw.parameters_tabs, mw.reset_parameters_button,
+        ]
 
-        for control in all_controls:
-            if control: control.setEnabled(False)
-
-        # Debug controls (clear/export log, verbose toggle) stay enabled in every
-        # state, including during long renders and validation, so the user can enable
-        # verbose logging or export the log of a misbehaving run.
-        for control in debug_controls:
-            if control: control.setEnabled(True)
-
-        self.main_window.cancel_button.setEnabled(False)
-        self.main_window.edit_selection_button.setEnabled(False)
-        self.main_window.validation_button.setText(QCoreApplication.translate("MainWindow", "Check Files"))
-
+        # Collect the controls that are enabled in the new state, then apply each
+        # control's final state exactly once. Disabling and re-enabling a control that
+        # stays enabled (e.g. the slide table on VALIDATED -> READY_TO_VALIDATE after
+        # an edit) would drop its keyboard focus mid-typing.
+        enabled = {mw.show_gallery_action}
         status_message = ""
 
-        is_normalized = self.main_window.normalize_loudness_checkbox.isChecked()
-        self.main_window.normalize_loudness_mode_label.setEnabled(is_normalized)
-        self.main_window.normalize_loudness_mode_combo.setEnabled(is_normalized)
-
         if new_state == AppState.CHECKING_ENCODERS:
-            self.main_window.show_gallery_action.setEnabled(True)
             status_message = QCoreApplication.translate("MainWindow", "Performing initial check of available encoders...")
-        
+
         elif new_state == AppState.AWAITING_PROJECT:
-            self.main_window.select_project_folder_button.setEnabled(True)
-            self.main_window.load_settings_action.setEnabled(True)
-            self.main_window.import_dmj_action.setEnabled(True)
-            self.main_window.show_gallery_action.setEnabled(True)
-            if hasattr(self.main_window, 'install_ffmpeg_action'):
-                self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
+            enabled |= {mw.select_project_folder_button, mw.load_settings_action, mw.import_dmj_action}
             status_message = QCoreApplication.translate("MainWindow", "Please select the project folder to begin.")
-        
+
         elif new_state == AppState.LOADING_PROJECT:
-            self.main_window.show_gallery_action.setEnabled(True)
             status_message = QCoreApplication.translate("MainWindow", "Loading project and scanning material files...")
 
         elif new_state == AppState.PROJECT_LOADED_UIPOPULATED:
             status_message = QCoreApplication.translate("MainWindow", "Project loaded. Verifying PDF structure...")
-            self.main_window.show_gallery_action.setEnabled(True)
 
         elif new_state == AppState.PREPARE_TO_VALIDATE:
-            self.main_window.select_project_folder_button.setEnabled(True)
-            self.main_window.load_settings_action.setEnabled(True)
-            self.main_window.import_dmj_action.setEnabled(True)
-            self.main_window.show_gallery_action.setEnabled(True)
-            self.main_window.select_output_button.setEnabled(True)
-            self.main_window.slide_table.setEnabled(True)
-            
-            for widget in [self.main_window.select_all_button, self.main_window.select_video_button, self.main_window.select_audio_button,
-                           self.main_window.delete_temp_checkbox, self.main_window.append_duration_checkbox, self.main_window.filename_input,
-                           self.main_window.parameters_tabs, self.main_window.reset_parameters_button]:
-                widget.setEnabled(True)
+            enabled |= set(project_controls)
             status_message = QCoreApplication.translate("MainWindow", "Please select the output folder to enable validation.")
 
         elif new_state == AppState.READY_TO_VALIDATE:
-            self.main_window.select_project_folder_button.setEnabled(True)
-            self.main_window.load_settings_action.setEnabled(True)
-            self.main_window.import_dmj_action.setEnabled(True)
-            self.main_window.show_gallery_action.setEnabled(True)
-            self.main_window.select_output_button.setEnabled(True)
-            self.main_window.slide_table.setEnabled(True)
-            
-            for widget in [self.main_window.select_all_button, self.main_window.select_video_button, self.main_window.select_audio_button,
-                           self.main_window.delete_temp_checkbox, self.main_window.append_duration_checkbox, self.main_window.filename_input,
-                           self.main_window.parameters_tabs, self.main_window.reset_parameters_button, self.main_window.validation_button]:
-                widget.setEnabled(True)
-            
-            if self.main_window.has_validated_once:
+            enabled |= set(project_controls) | {mw.validation_button}
+            if mw.has_validated_once:
                 status_message = QCoreApplication.translate("MainWindow", "Settings have changed. Please click 'Check Files' to re-validate.")
             else:
                 status_message = QCoreApplication.translate("MainWindow", "Ready to validate. Please click 'Check Files' to proceed.")
 
         elif new_state == AppState.VALIDATING:
-            self.main_window.cancel_button.setEnabled(True)
-            self.main_window.show_gallery_action.setEnabled(True)
-            self.main_window.validation_button.setText(QCoreApplication.translate("MainWindow", "Checking..."))
+            enabled.add(mw.cancel_button)
             status_message = QCoreApplication.translate("MainWindow", "Validating project files, please wait...")
 
         elif new_state == AppState.VALIDATED:
-            for control in all_controls:
-                if control: control.setEnabled(True)
-            if hasattr(self.main_window, 'install_ffmpeg_action'):
-                self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
+            enabled |= {c for c in all_controls if c is not None and c is not mw.cancel_button}
             status_message = QCoreApplication.translate("MainWindow", "Validation successful. Ready to create video.")
 
         elif new_state == AppState.PROCESSING:
-            self.main_window.cancel_button.setEnabled(True)
-            self.main_window.show_gallery_action.setEnabled(True)
+            enabled.add(mw.cancel_button)
             status_message = QCoreApplication.translate("MainWindow", "Processing video, please wait...")
-        
+
         elif new_state == AppState.CANCELLING:
-            self.main_window.show_gallery_action.setEnabled(True)
             status_message = QCoreApplication.translate("MainWindow", "Cancelling process...")
 
         elif new_state == AppState.ERROR:
-            status_message = self.main_window._ffmpeg_missing_message()
-            self.main_window.show_gallery_action.setEnabled(True)
-            if hasattr(self.main_window, 'install_ffmpeg_action'):
-                self.main_window.install_ffmpeg_action.setEnabled(not self.main_window.ffmpeg_installed)
-        
+            status_message = mw.ffmpeg_missing_message()
+
+        # The installer is only offered while FFmpeg is missing.
+        enabled.discard(install_action)
+        if install_action is not None and new_state in (AppState.AWAITING_PROJECT, AppState.VALIDATED, AppState.ERROR):
+            if not mw.ffmpeg_installed:
+                enabled.add(install_action)
+
+        # Open Recent loads another project, which is only allowed while idle.
+        recent_menu = getattr(mw, 'recent_menu', None)
+        if recent_menu is not None:
+            recent_menu.setEnabled(new_state in (AppState.AWAITING_PROJECT, AppState.PREPARE_TO_VALIDATE,
+                                                 AppState.READY_TO_VALIDATE, AppState.VALIDATED))
+
+        for control in all_controls:
+            if control is not None:
+                is_enabled = control in enabled
+                if control.isEnabled() != is_enabled:
+                    control.setEnabled(is_enabled)
+
+        # Debug controls (clear/export log, verbose toggle) stay enabled in every
+        # state, including during long renders and validation, so the user can enable
+        # verbose logging or export the log of a misbehaving run.
+        for control in (mw.clear_debug_button, mw.export_debug_button, mw.verbose_debug_checkbox):
+            control.setEnabled(True)
+
+        if new_state == AppState.VALIDATING:
+            mw.validation_button.setText(QCoreApplication.translate("MainWindow", "Checking..."))
+        else:
+            mw.validation_button.setText(QCoreApplication.translate("MainWindow", "Check Files"))
+
+        is_normalized = mw.normalize_loudness_checkbox.isChecked()
+        mw.normalize_loudness_mode_label.setEnabled(is_normalized)
+        mw.normalize_loudness_mode_combo.setEnabled(is_normalized)
+
         status_label = self.main_window.status_label
         status_label.setProperty("severity", self._severity_for_state(new_state))
         # Re-polish so the new dynamic property takes effect immediately.
@@ -155,14 +144,29 @@ class UIStateManager:
 
     def sync_model_to_ui(self, params: ProjectParameters):
         try:
+            # Before the startup encoder test the codec list only holds a placeholder;
+            # nothing the UI shows then may be written back into the model.
+            combo = self.main_window.codec_combo
+            encoders_ready = combo.count() > 0 and combo.itemText(0) != "No Encoders Found"
+            stored_codec = params.codec
             codec_to_set = params.codec
             if self.main_window.codec_combo.findText(codec_to_set) != -1:
                 self.main_window.codec_combo.setCurrentText(codec_to_set)
             elif self.main_window.codec_combo.count() > 0 and self.main_window.codec_combo.itemText(0) != "No Encoders Found":
-                self.main_window.codec_combo.setCurrentIndex(0)
+                # The stored codec has no working encoder on this machine: fall back to
+                # the default codec if available (not simply the first, alphabetical
+                # entry, which is the slow AV1) and say so in the log.
+                default_codec = ProjectParameters().codec
+                if self.main_window.codec_combo.findText(default_codec) != -1:
+                    self.main_window.codec_combo.setCurrentText(default_codec)
+                else:
+                    self.main_window.codec_combo.setCurrentIndex(0)
                 codec_to_set = self.main_window.codec_combo.currentText()
+                self.main_window.write_debug(
+                    f"[WARNING] Codec '{params.codec}' has no working encoder on this computer; using '{codec_to_set}'.")
+                params.codec = codec_to_set
 
-            self.main_window._update_hardware_encoding_options(codec_to_set)
+            self.main_window.update_hardware_encoding_options(codec_to_set)
 
             hardware_to_set = params.hardware_encoding
             index = self.main_window.hardware_encoding_combo.findData(hardware_to_set)
@@ -170,15 +174,37 @@ class UIStateManager:
                 self.main_window.hardware_encoding_combo.setCurrentIndex(index)
             elif self.main_window.hardware_encoding_combo.count() > 0:
                 self.main_window.hardware_encoding_combo.setCurrentIndex(0)
+                if encoders_ready:
+                    params.hardware_encoding = self.main_window.hardware_encoding_combo.currentData()
 
-            encoding_mode_to_set = params.encoding_mode
-            self.main_window.encoding_mode_combo.setCurrentText(encoding_mode_to_set)
+            # Combos for keyed options carry the key as item data.
+            def select_data(combo, value):
+                index = combo.findData(value)
+                if index != -1:
+                    combo.setCurrentIndex(index)
+
+            select_data(self.main_window.encoding_mode_combo, params.encoding_mode)
+            # Set the pass before refreshing the options: the refresh forces 1-Pass
+            # for encoders without two-pass support.
+            select_data(self.main_window.pass_combo, params.encoding_pass)
             self.main_window.update_encoding_options()
-            self.main_window.value_spin.setValue(params.encoding_value)
+            forced_mode = self.main_window.encoding_mode_combo.currentData()
+            same_scale = (self.main_window._value_scale(stored_codec, params.encoding_mode)
+                          == self.main_window._value_scale(codec_to_set, params.encoding_mode))
+            if forced_mode == params.encoding_mode and same_scale:
+                self.main_window.value_spin.setValue(params.encoding_value)
+            elif encoders_ready:
+                # The encoder cannot use the stored mode (VideoToolbox has no quality
+                # mode), or a codec fallback changed the value's scale: keep the model
+                # in line with what the UI now shows instead of letting the next sync
+                # silently swap in the new default.
+                params.encoding_mode = forced_mode
+                params.encoding_value = self.main_window.value_spin.value()
+            if encoders_ready:
+                params.encoding_pass = self.main_window.pass_combo.currentData() or params.encoding_pass
 
             self.main_window.resolution_combo.setCurrentText(params.resolution)
             self.main_window.fps_combo.setCurrentText(str(params.fps))
-            self.main_window.pass_combo.setCurrentText(params.encoding_pass)
             self.main_window.audio_bitrate_combo.setCurrentText(params.audio_bitrate)
             self.main_window.audio_sample_rate_combo.setCurrentText(params.audio_sample_rate)
             ch_index = self.main_window.audio_channels_combo.findData(params.audio_channels, Qt.UserRole, Qt.MatchExactly)
@@ -190,7 +216,7 @@ class UIStateManager:
             if ch_index != -1:
                 self.main_window.audio_channels_combo.setCurrentIndex(ch_index)
             self.main_window.normalize_loudness_checkbox.setChecked(params.normalize_loudness)
-            self.main_window.normalize_loudness_mode_combo.setCurrentText(params.normalize_loudness_mode)
+            select_data(self.main_window.normalize_loudness_mode_combo, params.normalize_loudness_mode)
             self.main_window.watermark_color_combo.setCurrentText(params.watermark_color)
             self.main_window.watermark_fontsize_spin.setValue(params.watermark_fontsize)
             self.main_window.watermark_fontfamily_combo.setCurrentText(params.watermark_fontfamily)

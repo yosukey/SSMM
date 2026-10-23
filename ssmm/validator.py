@@ -4,11 +4,10 @@ import hashlib
 import html
 import io
 import json
-import math
-import platform
 import re
 import subprocess
 import sys
+import tempfile
 import os
 from pathlib import Path
 from typing import Optional, Tuple
@@ -21,6 +20,8 @@ from PIL import Image
 from ssmm import config
 from ssmm import pdf_utils
 from ssmm.models import ProjectModel, ProjectParameters, Slide, ValidationMessages
+from ssmm.media_utils import (find_project_pdfs, has_dar_override, is_quarter_turn,
+                              normalize_rotation, slide_timeline)
 from ssmm.ui_helpers import calculate_pinp_geometry, create_pinp_preview_for_report
 from ssmm.utils import get_ffmpeg_path, get_ffprobe_path, get_ffmpeg_source
 
@@ -86,7 +87,7 @@ class ProjectValidator:
         self.validated_pdf_hash: str | None = None
 
     def analyze_material(self, material_path: Path, slide: Slide):
-        file_hash = self._get_file_hash(material_path)
+        file_hash = self.get_file_hash(material_path)
         if not file_hash:
             return
 
@@ -142,15 +143,16 @@ class ProjectValidator:
         self.validated_pdf_hash = None
         self.log("[INFO] All validator caches have been cleared.")
 
-    def _get_pdf_structure(self, pdf_path: Path) -> dict:
+    def get_pdf_structure(self, pdf_path: Path) -> dict:
+        # Not tied to the validation cancel flag: this is also called from the UI
+        # thread outside of a validation run, where a stale flag from an earlier
+        # cancel must not make the PDF look empty.
         structure = {'page_count': 0, 'page_dims': []}
         doc = None
         try:
             doc = pdf_utils.open_pdf(pdf_path)
             structure['page_count'] = pdf_utils.num_pages(doc)
             for i in range(structure['page_count']):
-                if self.is_canceled():
-                    return {}
                 structure['page_dims'].append(pdf_utils.page_size(doc, i))
             return structure
         except Exception as e:
@@ -162,19 +164,33 @@ class ProjectValidator:
     def cache_pdf_structure(self, pdf_path: Path):
         try:
             self.validated_pdf_path = pdf_path
-            self.validated_pdf_structure = self._get_pdf_structure(pdf_path)
+            self.validated_pdf_structure = self.get_pdf_structure(pdf_path)
             page_count = self.validated_pdf_structure.get('page_count', 0)
             self.log(f"[INFO] PDF structure cache updated for: {pdf_path.name} ({page_count} pages)")
         except Exception as e:
             self.log(f"[ERROR] Failed to cache PDF structure: {e}")
     
+    @staticmethod
+    def _page_hash_and_thumbnail(doc, page_index: int) -> tuple[str, str]:
+        # One render feeds both the perceptual hash and the Base64 PNG thumbnail.
+        pil_image = pdf_utils.render_page_to_pil(doc, page_index, scale=config.PDF_DETAIL_RENDER_SCALE)
+        p_hash = str(imagehash.phash(pil_image))
+        target_h = config.PDF_THUMBNAIL_HEIGHT
+        thumbnail_image = pil_image.copy()
+        thumbnail_image.thumbnail((max(1, int(target_h * pil_image.width / pil_image.height)), target_h),
+                                  Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        thumbnail_image.save(buffer, format="PNG")
+        return p_hash, base64.b64encode(buffer.getvalue()).decode('utf-8')
+
     def compute_and_populate_pdf_details(self, project_model: ProjectModel):
         self.log("[INFO] Computing p-hash and thumbnails for PDF pages...")
         if not project_model.project_folder:
             self.log("[WARNING] No project folder set, cannot compute PDF details.")
             return
 
-        pdf_path = next(iter(sorted(project_model.project_folder.glob('*.[pP][dD][fF]'))), None)
+        pdf_files = find_project_pdfs(project_model.project_folder)
+        pdf_path = pdf_files[0] if pdf_files else None
         if not pdf_path:
             self.log("[WARNING] No PDF found, cannot compute page details.")
             return
@@ -188,20 +204,7 @@ class ProjectValidator:
                 return
 
             for i, slide in enumerate(project_model.slides):
-                pil_image = pdf_utils.render_page_to_pil(doc, i, scale=2.0)
-
-                p_hash = imagehash.phash(pil_image)
-                slide.p_hash = str(p_hash)
-                
-                target_thumb_height = 300
-                thumbnail_size = (int(target_thumb_height * pil_image.width / pil_image.height), target_thumb_height)
-                thumbnail_image = pil_image.copy()
-                thumbnail_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
-                
-                buffer = io.BytesIO()
-                thumbnail_image.save(buffer, format="PNG")
-                b64_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                slide.thumbnail_b64 = b64_string
+                slide.p_hash, slide.thumbnail_b64 = self._page_hash_and_thumbnail(doc, i)
 
             self.log("[INFO] Successfully computed and populated PDF details.")
         except Exception as e:
@@ -225,20 +228,9 @@ class ProjectValidator:
             details["page_count"] = pdf_page_count
 
             for i in range(pdf_page_count):
-                pil_image = pdf_utils.render_page_to_pil(doc, i, scale=2.0)
-
-                p_hash = imagehash.phash(pil_image)
-                details["p_hashes"].append(str(p_hash))
-
-                target_thumb_height = 300
-                thumbnail_size = (int(target_thumb_height * pil_image.width / pil_image.height), target_thumb_height)
-                thumbnail_image = pil_image.copy()
-                thumbnail_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
-
-                buffer = io.BytesIO()
-                thumbnail_image.save(buffer, format="PNG")
-                b64_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                details["thumbnails_b64"].append(b64_string)
+                p_hash, thumbnail_b64 = self._page_hash_and_thumbnail(doc, i)
+                details["p_hashes"].append(p_hash)
+                details["thumbnails_b64"].append(thumbnail_b64)
 
             return details, None
         except Exception as e:
@@ -266,6 +258,8 @@ class ProjectValidator:
                 self.log(f"[WARNING] Could not process or cache file '{material_name}': {e}")
 
     def start_validation(self):
+        # Clears a cancel request left over from a previous run. Called at the start
+        # of every validation/project-setup run so a stale flag cannot leak into it.
         self._is_canceled = False
 
     def cancel(self):
@@ -432,7 +426,7 @@ class ProjectValidator:
         # Sort so the chosen PDF is deterministic regardless of filesystem order, and
         # flag the presence of extra PDFs (a second PDF added after loading would
         # otherwise let validation, thumbnails and rendering diverge on which file to use).
-        pdf_files = sorted(project_model.project_folder.glob('*.[pP][dD][fF]')) if project_model.project_folder else []
+        pdf_files = find_project_pdfs(project_model.project_folder)
         pdf_path = pdf_files[0] if pdf_files else None
 
         if len(pdf_files) > 1:
@@ -453,8 +447,8 @@ class ProjectValidator:
             )
             messages.add_project_error(msg)
         else:
-            current_pdf_hash = self._get_file_hash(pdf_path)
-            current_pdf_structure = self._get_pdf_structure(pdf_path)
+            current_pdf_hash = self.get_file_hash(pdf_path)
+            current_pdf_structure = self.get_pdf_structure(pdf_path)
  
             # Condition 1: PDF unchanged (hash matches).
             if self.validated_pdf_hash and self.validated_pdf_hash == current_pdf_hash:
@@ -504,18 +498,9 @@ class ProjectValidator:
             messages.add_project_error(msg)
         
         if project_model.project_folder:
-            all_formats = config.SUPPORTED_FORMATS + ('.pdf',)
-            for entry in project_model.project_folder.iterdir():
-                if self._is_canceled: break
-                if entry.is_file() and entry.suffix.lower() in all_formats:
-                    # _get_file_hash returns "" (never raises) when a file cannot be
-                    # read. Surface that as a warning instead of recording an empty hash,
-                    # which would compare equal to any other unreadable file.
-                    file_hash = self._get_file_hash(entry)
-                    if file_hash:
-                        file_hashes_snapshot[entry.name] = file_hash
-                    else:
-                        messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "Could not create a hash for file {0}; it may be unreadable.").format(entry.name))
+            file_hashes_snapshot, unreadable = self.snapshot_project_files(project_model.project_folder)
+            for name in unreadable:
+                messages.add_project_warning(QCoreApplication.translate("ProjectValidator", "Could not create a hash for file {0}; it may be unreadable.").format(html.escape(name)))
 
         if self._is_canceled: return messages, page_count, file_hashes_snapshot
 
@@ -527,6 +512,7 @@ class ProjectValidator:
             if self._is_canceled: return messages, page_count, file_hashes_snapshot
             
             self._check_parameter_compatibility(project_model.parameters, messages)
+            self._check_intermediate_container_support(project_model.parameters, messages)
             if self._is_canceled: return messages, page_count, file_hashes_snapshot
             if project_model.parameters.export_youtube_chapters:
                 self._validate_youtube_chapters(project_model, messages)
@@ -535,7 +521,7 @@ class ProjectValidator:
         
         if not messages.has_errors() and pdf_path:
             self.cache_pdf_structure(pdf_path)
-            self.validated_pdf_hash = self._get_file_hash(pdf_path)
+            self.validated_pdf_hash = self.get_file_hash(pdf_path)
             if self.validated_pdf_structure:
                 page_count = self.validated_pdf_structure.get('page_count', 0)
                 self.log(f"[INFO] PDF validation successful. Structure and file hash cache updated for {pdf_path.name} ({page_count} pages).")
@@ -650,7 +636,6 @@ class ProjectValidator:
         source_map = {
             "system": "System",
             "user": "User Local (~/ffmpeg-bin)",
-            "bundled": "Bundled (LGPL)",
             "not_found": "Not Found"
         }
         source_label = source_map.get(src, "Unknown")
@@ -671,9 +656,9 @@ class ProjectValidator:
         if caps.get("EDITION") == "A":
             notice_html = [f"<b>FFmpeg Source:</b> {source_label}<br>"]
         else:
-            notice_html = [f"<b>FFmpeg Path:</b> {ffmpeg_bin}<br>"]
+            notice_html = [f"<b>FFmpeg Path:</b> {html.escape(ffmpeg_bin)}<br>"]
         if ver_line:
-            notice_html.append(f"<b>Version:</b> {ver_line}<br><br>")
+            notice_html.append(f"<b>Version:</b> {html.escape(ver_line)}<br><br>")
         else:
             notice_html.append("<br>")
         
@@ -748,8 +733,9 @@ class ProjectValidator:
 
             mf_path = project_model.project_folder / slide.filename
             if not mf_path.exists():
+                # Keep the assignment so it is not lost if the file is restored; the
+                # error already blocks rendering.
                 messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Material file '{0}' not found in project folder.").format(html.escape(slide.filename)))
-                slide.filename = None
                 continue
 
             try:
@@ -769,7 +755,7 @@ class ProjectValidator:
                     # Use the public method (handles caching)
                     self.analyze_material(mf_path, Slide())
                     
-                    file_hash = self._get_file_hash(mf_path)
+                    file_hash = self.get_file_hash(mf_path)
                     if not file_hash or file_hash not in self.info_cache:
                         messages.add_file_warning(material_name, QCoreApplication.translate("ProjectValidator", "Could not retrieve cached info for this file. It might be unreadable."))
                         continue
@@ -802,25 +788,21 @@ class ProjectValidator:
                         w, h, codec, bitrate, fps, dar_str = tech_info.get('width'), tech_info.get('height'), tech_info.get('codec'), tech_info.get('bitrate'), tech_info.get('fps'), tech_info.get('dar')
                         rotation = tech_info.get('rotate')
                         dar_override_note, rotation_note = "", ""
-                        if w > 0 and h > 0 and dar_str and ':' in dar_str and dar_str != '0:1':
-                            try:
-                                num, den = map(int, dar_str.split(':'))
-                                if den > 0 and abs((w / h) - (num / den)) > 1e-4:
-                                    dar_override_note = f" <b>(DAR override: {dar_str})</b>"
-                            except (ValueError, TypeError): pass
-                        if rotation and rotation != "0":
-                            rotation_note = f" <b>(Rotation: {rotation}°)</b>"
-                        tech_info_html.append(f"&nbsp;&nbsp;&nbsp;Video: {w}x{h}{dar_override_note}{rotation_note}, Codec: {codec}, Bitrate: {bitrate} kbps, FPS: {fps}")
+                        if has_dar_override(tech_info):
+                            dar_override_note = f" <b>(DAR override: {html.escape(str(dar_str))})</b>"
+                        if rotation:
+                            rotation_note = f" <b>(Rotation: {html.escape(str(rotation))}°)</b>"
+                        tech_info_html.append(f"&nbsp;&nbsp;&nbsp;Video: {w}x{h}{dar_override_note}{rotation_note}, Codec: {html.escape(str(codec))}, Bitrate: {bitrate} kbps, FPS: {fps}")
                     audio_streams_info = cached_data.get('audio_streams', [])
                     if not audio_streams_info and not is_video:
                         tech_info_html.append("&nbsp;&nbsp;&nbsp;" + QCoreApplication.translate("ProjectValidator", "No audio stream found."))
                     
                     for i, audio_info in enumerate(audio_streams_info):
-                        codec = audio_info.get('codec', 'N/A')
+                        codec = html.escape(str(audio_info.get('codec', 'N/A')))
                         bitrate = audio_info.get('bitrate', 0)
-                        sample_rate = audio_info.get('sample_rate', 'N/A')
-                        channels = audio_info.get('channels', '?')
-                        layout = audio_info.get('channel_layout', 'N/A')
+                        sample_rate = html.escape(str(audio_info.get('sample_rate', 'N/A')))
+                        channels = html.escape(str(audio_info.get('channels', '?')))
+                        layout = html.escape(str(audio_info.get('channel_layout', 'N/A')))
                         lang = html.escape(str(audio_info.get('language', 'unk')))
                         title = html.escape(str(audio_info.get('title', '')))
 
@@ -837,40 +819,69 @@ class ProjectValidator:
 
                     messages.add_file_tech_info(material_name, tech_info_html)
                 except Exception as e:
-                    messages.add_file_warning(material_name, QCoreApplication.translate("ProjectValidator", "Could not generate report detail: {0}").format(e))
+                    messages.add_file_warning(material_name, QCoreApplication.translate("ProjectValidator", "Could not generate report detail: {0}").format(html.escape(str(e))))
 
-    def _get_file_hash(self, file_path: Path) -> str:
+    def get_file_hash(self, file_path: Path) -> str:
+        """Content fingerprint of a file, cached by (path, mtime, size).
+
+        Files up to config.FULL_HASH_MAX_BYTES get a full SHA-256. Larger files
+        (typically videos) are fingerprinted from their size plus head, middle and
+        tail blocks, which detects replaced or re-encoded media while keeping the
+        first probe of a multi-GB file fast enough for the UI thread. Returns ""
+        when the file cannot be read.
+        """
         path_str = str(file_path.resolve())
-        
+
         try:
-            mtime = os.path.getmtime(file_path)
-            size = os.path.getsize(file_path)
+            stat = os.stat(file_path)
         except OSError as e:
             self.log(f"[ERROR] Could not read metadata for {file_path.name}: {e}")
             return ""
+        mtime, size = stat.st_mtime_ns, stat.st_size
 
-        if path_str in self.file_hash_cache:
-            cached_data = self.file_hash_cache[path_str]
-            if cached_data.get('mtime') == mtime and cached_data.get('size') == size:
-                return cached_data.get('hash', '')
+        cached_data = self.file_hash_cache.get(path_str)
+        if cached_data and cached_data.get('mtime') == mtime and cached_data.get('size') == size:
+            return cached_data.get('hash', '')
 
         sha256_hash = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
-                for byte_block in iter(lambda: f.read(1024 * 1024), b""):
-                    if self._is_canceled: return ""
-                    sha256_hash.update(byte_block)
-            
+                if size <= config.FULL_HASH_MAX_BYTES:
+                    for byte_block in iter(lambda: f.read(1024 * 1024), b""):
+                        sha256_hash.update(byte_block)
+                else:
+                    block = config.SAMPLED_HASH_BLOCK_BYTES
+                    sha256_hash.update(f"sampled:{size}".encode("ascii"))
+                    for offset in (0, (size - block) // 2, size - block):
+                        f.seek(offset)
+                        sha256_hash.update(f.read(block))
             file_hash = sha256_hash.hexdigest()
-            self.file_hash_cache[path_str] = {
-                'hash': file_hash,
-                'mtime': mtime,
-                'size': size
-            }
-            return file_hash
         except (IOError, OSError) as e:
             self.log(f"[ERROR] Could not calculate hash for {file_path.name}: {e}")
             return ""
+
+        self.file_hash_cache[path_str] = {'hash': file_hash, 'mtime': mtime, 'size': size}
+        return file_hash
+
+    def snapshot_project_files(self, folder: Optional[Path]) -> tuple[dict, list[str]]:
+        """Fingerprints of the PDF and media files directly inside ``folder``.
+
+        Returns (snapshot, unreadable_names). Validation stores the snapshot and the
+        main window compares a fresh one before rendering, so both must come from
+        this single helper.
+        """
+        snapshot, unreadable = {}, []
+        if not folder or not Path(folder).is_dir():
+            return snapshot, unreadable
+        all_formats = config.SUPPORTED_FORMATS + ('.pdf',)
+        for entry in sorted(Path(folder).iterdir()):
+            if entry.is_file() and entry.suffix.lower() in all_formats:
+                file_hash = self.get_file_hash(entry)
+                if file_hash:
+                    snapshot[entry.name] = file_hash
+                else:
+                    unreadable.append(entry.name)
+        return snapshot, unreadable
 
     def _check_ffmpeg_installation(self, messages: ValidationMessages):
         try:
@@ -889,7 +900,7 @@ class ProjectValidator:
                     "It is highly recommended to install a matching pair of ffmpeg and ffprobe from the same official build to ensure stability."
                 ).format(ffmpeg_version, ffprobe_version)
                 messages.add_project_warning(msg)
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             caps = load_capabilities()
             
             base_message = QCoreApplication.translate("ProjectValidator", "FFmpeg was not found. This application requires a matching pair of ffmpeg and ffprobe to function.")
@@ -959,13 +970,13 @@ class ProjectValidator:
                 ).format(pages_str)
                 messages.add_project_warning(msg)
         except Exception as e:
-            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Failed to open or process PDF file: {0}. Error: {1}").format(pdf_path.name, e))
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator", "Failed to open or process PDF file: {0}. Error: {1}").format(html.escape(pdf_path.name), html.escape(str(e))))
         finally:
             pdf_utils.close_pdf(doc)
         return page_count
 
     def _check_parameter_compatibility(self, params: "ProjectParameters", messages: ValidationMessages):
-        if params.hardware_encoding == 'videotoolbox' and params.encoding_mode == config.ENCODING_MODES["QUALITY"]:
+        if params.hardware_encoding == 'videotoolbox' and params.encoding_mode == "QUALITY":
             msg = QCoreApplication.translate("ProjectValidator",
                 "Incompatible settings: Apple VideoToolbox does not support Quality (CRF/CQP) mode.<br><br>"
                 "<b>[Cause]</b><br>"
@@ -974,6 +985,48 @@ class ProjectValidator:
                 "In the 'Video Options' tab, please change the 'Encoding Mode' to either 'Bitrate (VBR)' or 'Bitrate (CBR)'."
             )
             messages.add_project_error(msg)
+
+        encoder = self._resolve_encoder(params)
+        if (params.encoding_pass == "TWO_PASS" and params.encoding_mode != "QUALITY" and encoder
+                and encoder not in config.TWO_PASS_ENCODERS and encoder not in config.MULTIPASS_ENCODERS):
+            messages.add_project_notice(QCoreApplication.translate("ProjectValidator",
+                "The selected encoder '{0}' does not support 2-pass encoding; it will encode in a single pass.").format(html.escape(encoder)))
+
+    @staticmethod
+    def _resolve_encoder(params: "ProjectParameters") -> Optional[str]:
+        if params.hardware_encoding:
+            return config.CODEC_MAP.get(params.codec, {}).get(params.hardware_encoding)
+        return config.SOFTWARE_CODEC_MAP.get(params.codec)
+
+    def _check_intermediate_container_support(self, params: "ProjectParameters", messages: ValidationMessages):
+        # AV1 segments are written as MP4 with PCM audio ('ipcm'), which older FFmpeg
+        # builds (before 6.0) cannot mux. Test it up front so the render does not fail
+        # on its first segment.
+        encoder = self._resolve_encoder(params) or ""
+        if 'av1' not in encoder:
+            return
+        try:
+            ffmpeg_path = str(get_ffmpeg_path())
+        except FileNotFoundError:
+            return
+        with tempfile.TemporaryDirectory(prefix="ssmm-probe-") as tmp:
+            probe = Path(tmp) / f"probe{config.INTERMEDIATE_CONTAINER_AV1}"
+            try:
+                result = subprocess.run(
+                    [ffmpeg_path, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+                     '-t', '0.1', '-c:a', config.INTERMEDIATE_AUDIO_CODEC, str(probe)],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    timeout=config.ENCODER_TEST_TIMEOUT_S, creationflags=config.SUBPROCESS_CREATION_FLAGS)
+                supported = result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                supported = False
+        if not supported:
+            messages.add_project_error(QCoreApplication.translate("ProjectValidator",
+                "The installed FFmpeg cannot write the intermediate files needed for AV1.<br><br>"
+                "<b>[Cause]</b><br>"
+                "AV1 segments are stored as MP4 with uncompressed audio, which requires FFmpeg 6.0 or later.<br><br>"
+                "<b>[Action]</b><br>"
+                "Update FFmpeg, or select a different codec in the 'Basic' tab."))
 
     def _validate_youtube_chapters(self, project_model: ProjectModel, messages: ValidationMessages):
         if not any(s.chapter_title for s in project_model.slides):
@@ -987,25 +1040,11 @@ class ProjectValidator:
             messages.add_project_error(msg)
             return
 
-        fps = project_model.parameters.fps
-
-        def q(seconds):
-            # Mirror VideoProcessor._quantize_duration_for_fps so the 10-second minimum
-            # is checked against the actually-rendered timeline (each duration/interval
-            # is rounded up to the FPS grid), not the raw values.
-            if seconds <= 0 or fps <= 0:
-                return 0.0
-            return math.ceil(seconds * fps) / fps
-
-        chapters = []
-        current_time = 0.0
-        for i, slide in enumerate(project_model.slides):
-            if slide.chapter_title:
-                chapters.append({'title': slide.chapter_title, 'start_time': current_time, 'slide_num': i + 1})
-
-            current_time += q(slide.duration)
-            if i < len(project_model.slides) - 1:
-                current_time += q(slide.interval_to_next)
+        # Same timeline as the renderer, so the 10-second minimum is checked against
+        # the actually-rendered (frame-quantized) chapter lengths.
+        start_times, current_time = slide_timeline(project_model.slides, project_model.parameters.fps)
+        chapters = [{'title': slide.chapter_title, 'start_time': start_times[i], 'slide_num': i + 1}
+                    for i, slide in enumerate(project_model.slides) if slide.chapter_title]
 
         if not chapters or chapters[0]['start_time'] != 0.0:
             msg = QCoreApplication.translate("ProjectValidator",
@@ -1047,7 +1086,9 @@ class ProjectValidator:
         
         slides_by_filename = {}
         for i, slide in enumerate(project_model.slides):
-            if slide.filename and slide.is_video:
+            # A kept-but-missing material is already reported as an error; its stale
+            # probe data must not produce a PinP summary for a file that is not there.
+            if slide.filename and slide.is_video and (project_model.project_folder / slide.filename).exists():
                 if slide.filename not in slides_by_filename:
                     slides_by_filename[slide.filename] = []
                 slides_by_filename[slide.filename].append((i, slide))
@@ -1058,15 +1099,11 @@ class ProjectValidator:
                 messages.add_file_warning(filename, QCoreApplication.translate("ProjectValidator", "This is a Variable Frame Rate (VFR) video. It will be automatically converted to a constant frame rate to prevent sync issues, but please check the final output carefully."))
             if first_slide.tech_info.get('is_interlaced'):
                 messages.add_file_notice(filename, QCoreApplication.translate("ProjectValidator", "This video appears to be interlaced. It will be automatically deinterlaced for smooth playback."))
-            if first_slide.tech_info.get('rotate') in ["90", "270", "-90"]:
+            if is_quarter_turn(first_slide.tech_info.get('rotate')):
                 messages.add_file_notice(filename, QCoreApplication.translate("ProjectValidator", "This is a vertical video and will be automatically rotated to the correct orientation."))
             
-            w, h, dar_str = first_slide.tech_info.get('width', 0), first_slide.tech_info.get('height', 0), first_slide.tech_info.get('dar')
-            if w > 0 and h > 0 and dar_str and ':' in dar_str and dar_str != '0:1':
-                try:
-                    num, den = map(int, dar_str.split(':'))
-                    if den > 0 and abs((w / h) - (num / den)) > 1e-4: dar_override_in_use = True
-                except (ValueError, TypeError): pass
+            if has_dar_override(first_slide.tech_info):
+                dar_override_in_use = True
 
             for slide_index, slide in slide_usages:
                 pinp_geometry = calculate_pinp_geometry(slide, output_width, output_height)
@@ -1077,9 +1114,8 @@ class ProjectValidator:
                     usage_warnings.append(QCoreApplication.translate("ProjectValidator", "Source FPS ({0}) is higher than the output FPS ({1}). This may result in less smooth motion as frames will be dropped.").format(slide.tech_info.get('fps'), params.fps))
                 # For a 90/270-rotated video the effective source height is the coded
                 # width, so compare against that to match how the frame is displayed.
-                rotation = slide.tech_info.get('rotate')
                 source_height = (slide.tech_info.get('width', 0)
-                                 if rotation in ["90", "270", "-90"]
+                                 if is_quarter_turn(slide.tech_info.get('rotate'))
                                  else slide.tech_info.get('height', 0))
                 if pinp_geometry['height'] > source_height:
                     usage_warnings.append(QCoreApplication.translate("ProjectValidator", "This video will be upscaled from {0}px to {1}px height, which may reduce its visual quality.").format(source_height, round(pinp_geometry['height'])))
@@ -1185,17 +1221,14 @@ class ProjectValidator:
                     field_order = stream.get('field_order')
                     is_interlaced = field_order in ['tt', 'bb', 'tb', 'bt']
 
-                    rotation = None
-                    if 'side_data_list' in stream:
-                        for side_data in stream['side_data_list']:
-                            if 'rotation' in side_data:
-                                rotation = str(side_data['rotation']).split('.')[0]
-                                break
-                    
-                    if rotation is None:
-                        stream_tags = stream.get('tags', {})
-                        if stream_tags and 'rotate' in stream_tags:
-                            rotation = str(stream_tags.get('rotate'))
+                    # Stored as the clockwise display rotation ("90"/"180"/"270" or
+                    # None); see media_utils.normalize_rotation for the sign rules.
+                    matrix_rotation = None
+                    for side_data in stream.get('side_data_list', []) or []:
+                        if 'rotation' in side_data:
+                            matrix_rotation = side_data['rotation']
+                            break
+                    rotation = normalize_rotation(matrix_rotation, (stream.get('tags') or {}).get('rotate'))
 
                     bitrate_str = stream.get('bit_rate', '0')
                     video_bitrate = 0

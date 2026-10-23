@@ -1,18 +1,19 @@
 name: build-portable
 
-# Manually-triggered workflow that builds the Windows portable (one-file) EXE.
-# The automatic build-release workflow no longer produces this artifact, so use
+# Manually-triggered workflow that builds the Windows portable package: the
+# PyInstaller one-dir build zipped into a single archive (extract and run SSMM.exe).
+# The automatic build-release workflow does not produce this artifact, so use
 # this workflow to generate it on demand and (optionally) attach it to an
 # existing GitHub Release.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to version the portable EXE with (e.g. v1.0.0). Leave empty to produce an unversioned "dev" build.'
+        description: 'Release tag to version the portable package with (e.g. v1.0.0). Leave empty to produce an unversioned "dev" build.'
         required: false
         type: string
       attach_to_release:
-        description: 'Attach the built portable EXE to the GitHub Release identified by the tag above.'
+        description: 'Attach the built portable package to the GitHub Release identified by the tag above.'
         required: false
         type: boolean
         default: false
@@ -67,15 +68,15 @@ jobs:
           (Get-Content ssmm/config.py) -replace "APP_VERSION = get_version\(\)", "APP_VERSION = '$ver'" | Set-Content ssmm/config.py
           echo "Updated ssmm/config.py to version $ver for build"
 
-      - name: Build for Windows Portable (one-file)
+      # One-dir build (FFmpeg is not bundled; the user's installation is used).
+      - name: Build for Windows Portable (one-dir)
         run: >
-          pyinstaller --noconsole --onefile --name "SSMM"
+          pyinstaller --noconsole --onedir --name "SSMM"
           --icon resources\assets\app_icon.ico
           --splash resources\assets\splash_screen.png
           --add-data "resources/assets;resources/assets"
           --add-data "resources/agif;resources/agif"
           --add-data "resources/fonts;resources/fonts"
-          --add-data "resources/ffmpeg;resources/ffmpeg"
           --add-data "resources/licenses;resources/licenses"
           --add-data "translations;translations"
           --collect-all PySide6.QtMultimedia
@@ -92,19 +93,19 @@ jobs:
           # Get architecture from runner context
           $arch = "${{ runner.arch }}".ToLower()
 
-          $portableName = "SSMM-${ver}-windows-${arch}-portable.exe"
-          Copy-Item "dist/SSMM.exe" $portableName
+          $portableName = "SSMM-${ver}-windows-${arch}-portable.zip"
+          Compress-Archive -Path "dist/SSMM" -DestinationPath $portableName
           echo "portable_name=$portableName" >> $env:GITHUB_OUTPUT
 
-      - name: Upload portable EXE as workflow artifact
+      - name: Upload portable package as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.portable_name }}
           path: ${{ steps.package.outputs.portable_name }}
 
-      - name: Attach portable EXE to Release
+      - name: Attach portable package to Release
         if: inputs.attach_to_release && inputs.tag != ''
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
-          files: SSMM-*-windows-*-portable.exe
+          files: SSMM-*-windows-*-portable.zip

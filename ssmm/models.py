@@ -28,14 +28,14 @@ class ProjectParameters:
     fps: int = 30
     codec: str = "H.264/MPEG-4 AVC"
     hardware_encoding: Optional[str] = None
-    encoding_mode: str = "Quality (CQP/CRF)"
-    encoding_value: int = 23
-    encoding_pass: str = "1-Pass"
+    encoding_mode: str = "QUALITY"   # key of config.ENCODING_MODES
+    encoding_value: int = config.DEFAULT_CRF_VALUE
+    encoding_pass: str = "ONE_PASS"  # key of config.ENCODING_PASSES
     audio_bitrate: str = "160k"
     audio_sample_rate: str = "32000"
     audio_channels: int = 2
     normalize_loudness: bool = False
-    normalize_loudness_mode: str = config.LOUDNORM_MODES["TWO_PASS"]
+    normalize_loudness_mode: str = "TWO_PASS"  # key of config.LOUDNORM_MODES
     add_watermark: bool = False
     watermark_text: str = ""
     watermark_opacity: int = 50
@@ -209,7 +209,7 @@ class ValidationMessages:
                         slide = usage["slide"]
                         pinp_geometry = usage["pinp_geometry"]
                         
-                        text_summary = f"<p>PinP size will be {pinp_geometry['width']}x{pinp_geometry['height']}px at '{slide.video_position}'.</p>"
+                        text_summary = f"<p>PinP size will be {pinp_geometry['width']}x{pinp_geometry['height']}px at '{html.escape(str(slide.video_position))}'.</p>"
                         visual_summary_html = f'<div class="pinp-preview"><img src="data:image/png;base64,{usage["preview_base64"]}" /></div>' if usage["preview_base64"] else ""
                         
                         body_content.append('<div class="usage-item">')

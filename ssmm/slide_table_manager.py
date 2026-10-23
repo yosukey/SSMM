@@ -4,7 +4,7 @@ from functools import partial
 from contextlib import contextmanager
 from typing import Callable
 
-from PySide6.QtWidgets import (QTableWidget, QLabel, QComboBox, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QTableWidget, QLabel, QComboBox, QLineEdit,
                                QSpinBox, QTableWidgetItem, QHeaderView, QMessageBox,
                                QWidget, QPushButton, QDialog)
 from PySide6.QtCore import QObject, Qt, Signal, QTimer
@@ -12,9 +12,11 @@ from PySide6.QtGui import QPixmap, QImage
 
 from ssmm import config
 from ssmm import theme as app_theme
-from ssmm.models import ProjectModel, Slide
+from ssmm.models import ProjectModel
 from ssmm.validator import ProjectValidator
-from ssmm.ui_helpers import calculate_pinp_geometry, superimpose_pinp_info, render_pdf_page_to_pixmap, superimpose_watermark
+from ssmm.media_utils import find_project_pdf
+from ssmm.ui_helpers import (fitted_page_width, letterbox_pixmap, render_pdf_page_to_pixmap,
+                             superimpose_pinp_info, superimpose_watermark)
 from ssmm.ui_main import wrap_cell_widget, ClickableLabel, NoWheelComboBox, NoWheelSpinBox
 from ssmm.ui_dialogs import EditEffectsDialog, SlidePreviewDialog, MediaPlayerDialog
 
@@ -90,11 +92,11 @@ class SlideTableManager(QObject):
 
         slide = self.project_model.slides[row_index]
         params = self.project_model.parameters
-        base_pixmap = self.thumbnail_cache[row_index]
+        output_width, output_height = map(int, params.resolution.split('x'))
+        # Show the page as it will be framed in the video (padded to the output
+        # aspect ratio), so the PinP box and the watermark land where they will render.
+        base_pixmap = letterbox_pixmap(self.thumbnail_cache[row_index], output_width, output_height)
         final_pixmap = base_pixmap
-
-        res_str = params.resolution
-        output_width, output_height = map(int, res_str.split('x'))
 
         if self.previews_enabled and slide.is_video:
             final_pixmap = superimpose_pinp_info(base_pixmap, slide, output_width, output_height)
@@ -115,12 +117,19 @@ class SlideTableManager(QObject):
         pdf_path = None
         if self.project_model.project_folder:
             # Sorted for a deterministic choice consistent with the validator/renderer.
-            pdf_path = next(iter(sorted(self.project_model.project_folder.glob('*.[pP][dD][fF]'))), None)
+            pdf_path = find_project_pdf(self.project_model.project_folder)
 
         try:
-            target_width = int(self.project_model.parameters.resolution.split('x')[0])
-        except (ValueError, AttributeError, IndexError):
-            target_width = 1920
+            output_width, output_height = map(int, self.project_model.parameters.resolution.split('x'))
+        except (ValueError, AttributeError):
+            output_width, output_height = 1920, 1080
+        # Render the page at the size it occupies inside the output frame, not at the
+        # full output width (a portrait page would otherwise become huge once padded).
+        thumb = self.thumbnail_cache.get(row_index)
+        if thumb is not None and not thumb.isNull():
+            target_width = fitted_page_width(thumb.width(), thumb.height(), output_width, output_height)
+        else:
+            target_width = output_width
 
         pixmap = render_pdf_page_to_pixmap(pdf_path, row_index, target_width)
         if pixmap is None:
@@ -128,6 +137,8 @@ class SlideTableManager(QObject):
             pixmap = self.thumbnail_cache.get(row_index)
 
         params = self.project_model.parameters
+        if pixmap is not None:
+            pixmap = letterbox_pixmap(pixmap, output_width, output_height)
         if pixmap is not None and params.add_watermark and params.watermark_text:
             pixmap = superimpose_watermark(pixmap, params)
 
@@ -200,7 +211,12 @@ class SlideTableManager(QObject):
                 
                 # Material ComboBox (Column 1)
                 material_combo = NoWheelComboBox()
-                self._populate_combo_with_tooltips(material_combo, all_material_choices)
+                row_choices = all_material_choices
+                if slide.filename and slide.filename not in all_material_choices:
+                    # Keep showing an assignment whose file is currently missing instead
+                    # of silently displaying "(Select Material)" for it.
+                    row_choices = all_material_choices + [slide.filename]
+                self._populate_combo_with_tooltips(material_combo, row_choices)
                 if slide.filename is None:
                     material_combo.setCurrentText(config.UNASSIGNED_MATERIAL_NAME)
                 else:
@@ -269,7 +285,7 @@ class SlideTableManager(QObject):
                     material_path = self.project_model.project_folder / slide.filename
                     if not material_path.exists(): continue
                     
-                    file_hash = self.validator._get_file_hash(material_path)
+                    file_hash = self.validator.get_file_hash(material_path)
                     if file_hash in self.validator.info_cache:
                         cached_data = self.validator.info_cache[file_hash]
                         slide.duration = cached_data.get('duration', 0.0)
@@ -439,10 +455,13 @@ class SlideTableManager(QObject):
             slide.filename = material_name
             mf_path = self.project_model.project_folder / material_name
             if mf_path.exists():
+                QApplication.setOverrideCursor(Qt.WaitCursor)
                 try:
                     self.validator.analyze_material(mf_path, slide)
                 except Exception as e:
                     self.log_message.emit(f"[ERROR] Could not probe file {material_name}: {e}")
+                finally:
+                    QApplication.restoreOverrideCursor()
         
         if not slide.is_video: slide.video_effects.clear()
         
@@ -505,12 +524,11 @@ class SlideTableManager(QObject):
                 action=self.calculate_and_display_total_duration,
                 delay_ms=config.DURATION_RECALC_DELAY_MS
             )
-        
-        self._debounce_action(
-            timer_key='model_changed_timer',
-            action=self.model_changed.emit,
-            delay_ms=config.DURATION_RECALC_DELAY_MS
-        )
+
+        # Not debounced: the edit must invalidate a previous validation immediately,
+        # otherwise Create Video could still run on unvalidated settings. Repeated
+        # emissions are cheap (the state transition is a no-op after the first).
+        self.model_changed.emit()
 
     def calculate_and_display_total_duration(self):
         needs_validation = any(s.duration == 0 for s in self.project_model.slides if s.filename and s.filename != config.SILENT_MATERIAL_NAME)
@@ -522,43 +540,6 @@ class SlideTableManager(QObject):
         self.project_model.total_duration = total_duration
         self.total_duration_label.setText(self.tr("Total Estimated Duration: {0}").format(self._format_duration(total_duration, include_msec=False)))
     
-    def apply_transition_to_all(self, transition: str):
-        if not self.project_model.slides: return
-
-        with block_signals(self.table):
-            for i in range(len(self.project_model.slides) - 1):
-                slide = self.project_model.slides[i]
-                slide.transition_to_next = transition
-            
-                widget_container = self.table.cellWidget(i, self.COL_TRANSITION)
-                if widget_container:
-                    combo_box = widget_container.findChild(QComboBox)
-                    if combo_box:
-                        with block_signals(combo_box):
-                            combo_box.setCurrentText(transition)
-        
-        QMessageBox.information(self.table, self.tr("Success"), self.tr("Transition '{0}' has been applied to all applicable slides.").format(transition))
-        self.model_changed.emit()
-
-    def apply_interval_to_all(self, interval: int):
-        if not self.project_model.slides: return
-  
-        with block_signals(self.table):
-            for i in range(len(self.project_model.slides) - 1):
-                slide = self.project_model.slides[i]
-                slide.interval_to_next = interval
-            
-                widget_container = self.table.cellWidget(i, self.COL_INTERVAL)
-                if widget_container:
-                    spin_box = widget_container.findChild(QSpinBox)
-                    if spin_box:
-                        with block_signals(spin_box):
-                            spin_box.setValue(interval)
-        
-        self.calculate_and_display_total_duration()
-        QMessageBox.information(self.table, self.tr("Success"), self.tr("Interval of {0} seconds has been applied to all applicable slides.").format(interval))
-        self.model_changed.emit()
-        
     def _format_duration(self, seconds, include_msec=True):
         if not isinstance(seconds, (int, float)) or seconds < 0: return ""
         if seconds == 0: return "0s"
