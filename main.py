@@ -79,7 +79,7 @@ class PyiSplashScreenManager:
             try:
                 import pyi_splash
                 pyi_splash.close()
-            except (ImportError, KeyError, RuntimeError):
+            except (ImportError, KeyError, RuntimeError, OSError):
                 pass
 
 if __name__ == "__main__":
@@ -179,7 +179,7 @@ if __name__ == "__main__":
             try:
                 import pyi_splash
                 pyi_splash.close()
-            except (ImportError, KeyError, RuntimeError) as splash_e:
+            except (ImportError, KeyError, RuntimeError, OSError) as splash_e:
                 original_stderr.write(f"Additionally, failed to close PyInstaller splash screen: {splash_e}\n")
 
     finally:

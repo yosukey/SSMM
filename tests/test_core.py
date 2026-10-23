@@ -361,7 +361,8 @@ def test_waveform_job_delivers_png_and_can_be_cancelled(tmp_path, qapp):
     QTest.qWait(300)
     slow.cancel()
     QTest.qWait(300)
-    assert slow._process is not None and slow._process.poll() is not None
+    # wait() rather than poll(): the job thread may still hold Popen's internal lock.
+    assert slow._process is not None and slow._process.wait(timeout=5) is not None
 
 
 def _count_streams(path):

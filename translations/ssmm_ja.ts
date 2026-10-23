@@ -221,6 +221,7 @@ sudo apt update &amp;&amp; sudo apt install ffmpeg
     <name>MainWindow</name>
     <message>
         <location filename="../ssmm/main_window.py" line="318"/>
+        <location filename="../ssmm/main_window.py" line="1074"/>
         <source>Please Wait</source>
         <translation>お待ちください</translation>
     </message>
@@ -235,12 +236,12 @@ sudo apt update &amp;&amp; sudo apt install ffmpeg
         <translation>フォントライセンスファイルの読み込みに失敗しました: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1943"/>
+        <location filename="../ssmm/main_window.py" line="1957"/>
         <source>Could not process the PDF file: {0}</source>
         <translation>PDFファイルを処理できませんでした: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1952"/>
+        <location filename="../ssmm/main_window.py" line="1966"/>
         <source>Could not get details from the new PDF: {0}</source>
         <translation>新しいPDFから詳細を取得できませんでした: {0}</translation>
     </message>
@@ -485,9 +486,9 @@ Note: The app itself is licensed under the MIT License. That license applies to 
     <message>
         <location filename="../ssmm/main_window.py" line="865"/>
         <location filename="../ssmm/main_window.py" line="1050"/>
-        <location filename="../ssmm/main_window.py" line="1464"/>
-        <location filename="../ssmm/main_window.py" line="1795"/>
-        <location filename="../ssmm/main_window.py" line="1973"/>
+        <location filename="../ssmm/main_window.py" line="1475"/>
+        <location filename="../ssmm/main_window.py" line="1809"/>
+        <location filename="../ssmm/main_window.py" line="1987"/>
         <source>Success</source>
         <translation>成功</translation>
     </message>
@@ -592,33 +593,33 @@ Please restart the application for the changes to take effect.</source>
         <translation>失敗</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1109"/>
+        <location filename="../ssmm/main_window.py" line="1116"/>
         <source>Load Error</source>
         <translation>読み込みエラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1109"/>
+        <location filename="../ssmm/main_window.py" line="1116"/>
         <source>The project model could not be loaded.</source>
         <translation>プロジェクトモデルを読み込めませんでした。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1182"/>
+        <location filename="../ssmm/main_window.py" line="1189"/>
         <source>Validation Required</source>
         <translation>検証が必要です</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1183"/>
+        <location filename="../ssmm/main_window.py" line="1190"/>
         <source>The project must be successfully validated before saving the settings.</source>
         <translation>設定を保存する前に、プロジェクトの検証を正常に完了する必要があります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1203"/>
-        <location filename="../ssmm/main_window.py" line="1468"/>
+        <location filename="../ssmm/main_window.py" line="1210"/>
+        <location filename="../ssmm/main_window.py" line="1479"/>
         <source>Error</source>
         <translation>エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1203"/>
+        <location filename="../ssmm/main_window.py" line="1210"/>
         <source>Failed to open folder:
 {0}</source>
         <translation>フォルダーを開けませんでした:
@@ -635,42 +636,42 @@ Please restart the application for the changes to take effect.</source>
         <translation>複数の PDF ファイルが見つかりました。フォルダー内の PDF が1つだけであることを確認してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1225"/>
+        <location filename="../ssmm/main_window.py" line="1232"/>
         <source>Update Check Skipped</source>
         <translation>更新チェックをスキップしました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1225"/>
+        <location filename="../ssmm/main_window.py" line="1232"/>
         <source>Running in local-dev mode. Update check skipped.</source>
         <translation>ローカル開発モードで実行中です。更新チェックをスキップしました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1259"/>
+        <location filename="../ssmm/main_window.py" line="1268"/>
         <source>New Version Available</source>
         <translation>新しいバージョンが利用可能です</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1262"/>
+        <location filename="../ssmm/main_window.py" line="1271"/>
         <source>A new version &lt;b&gt;{0}&lt;/b&gt; has been released.&lt;br&gt;&lt;br&gt;You are currently running version {1}.</source>
         <translation>新しいバージョン &lt;b&gt;{0}&lt;/b&gt; がリリースされました。&lt;br&gt;&lt;br&gt;現在お使いのバージョンは {1} です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1266"/>
+        <location filename="../ssmm/main_window.py" line="1275"/>
         <source>It is recommended to update to the latest version.&lt;br&gt;&lt;a href=&apos;{0}&apos;&gt;Open Download Page&lt;/a&gt;</source>
         <translation>最新バージョンへの更新をお勧めします。&lt;br&gt;&lt;a href=&apos;{0}&apos;&gt;ダウンロードページを開く&lt;/a&gt;</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1273"/>
+        <location filename="../ssmm/main_window.py" line="1282"/>
         <source>No Updates Found</source>
         <translation>更新は見つかりませんでした</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1273"/>
+        <location filename="../ssmm/main_window.py" line="1282"/>
         <source>You are currently running the latest version ({0}).</source>
         <translation>現在、最新バージョン ({0}) をご利用中です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1252"/>
+        <location filename="../ssmm/main_window.py" line="1261"/>
         <source>Update Check Failed</source>
         <translation>更新の確認に失敗しました</translation>
     </message>
@@ -695,12 +696,13 @@ Please restart the application for the changes to take effect.</source>
         <translation>テキストファイル (*.txt);;すべてのファイル (*)</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1078"/>
+        <location filename="../ssmm/main_window.py" line="1075"/>
+        <location filename="../ssmm/main_window.py" line="1085"/>
         <source>A background task is still running. Please wait a moment and try again.</source>
         <translation>バックグラウンド処理が実行中です。しばらく待ってから、もう一度お試しください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1252"/>
+        <location filename="../ssmm/main_window.py" line="1261"/>
         <source>Could not check for updates. This may be due to being offline or a network issue.
 
 Error: {0}</source>
@@ -709,114 +711,114 @@ Error: {0}</source>
 エラー: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1337"/>
+        <location filename="../ssmm/main_window.py" line="1346"/>
         <source>Validation Failed</source>
         <translation>検証に失敗しました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1337"/>
+        <location filename="../ssmm/main_window.py" line="1346"/>
         <source>Errors were found that prevent video creation.
 See &apos;Validation Result&apos; tab for details.</source>
         <translation>動画の作成を妨げるエラーが見つかりました。
 詳細は「検証結果」タブを参照してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1344"/>
+        <location filename="../ssmm/main_window.py" line="1353"/>
         <source>Validation Error</source>
         <translation>検証エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1348"/>
+        <location filename="../ssmm/main_window.py" line="1357"/>
         <source>Validation failed with an unexpected error: {0}</source>
         <translation>予期しないエラーにより検証に失敗しました: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1357"/>
+        <location filename="../ssmm/main_window.py" line="1366"/>
         <source>Validation was canceled by the user.</source>
         <translation>検証はユーザーによってキャンセルされました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1392"/>
-        <location filename="../ssmm/main_window.py" line="1416"/>
+        <location filename="../ssmm/main_window.py" line="1401"/>
+        <location filename="../ssmm/main_window.py" line="1425"/>
         <source>Warning</source>
         <translation>警告</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1392"/>
+        <location filename="../ssmm/main_window.py" line="1401"/>
         <source>Validation is not successful. Please validate again.</source>
         <translation>検証が成功していません。もう一度検証してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1401"/>
+        <location filename="../ssmm/main_window.py" line="1410"/>
         <source>Confirm Overwrite</source>
         <translation>上書きの確認</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1401"/>
+        <location filename="../ssmm/main_window.py" line="1410"/>
         <source>The file &apos;{0}&apos; already exists.
 Do you want to overwrite it?</source>
         <translation>ファイル &apos;{0}&apos; は既に存在します。
 上書きしますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1416"/>
+        <location filename="../ssmm/main_window.py" line="1425"/>
         <source>Please run a successful validation before creating a preview.</source>
         <translation>プレビューを作成する前に、検証を正常に完了してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1432"/>
+        <location filename="../ssmm/main_window.py" line="1441"/>
         <source>PDF Not Found</source>
         <translation>PDF が見つかりません</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1464"/>
+        <location filename="../ssmm/main_window.py" line="1475"/>
         <source>{0} created successfully at {1}
 Time taken: {2}</source>
         <translation>{0} を {1} に正常に作成しました
 所要時間: {2}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1468"/>
+        <location filename="../ssmm/main_window.py" line="1479"/>
         <source>An error occurred during {0} creation:
 {1}</source>
         <translation>{0} の作成中にエラーが発生しました:
 {1}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1473"/>
+        <location filename="../ssmm/main_window.py" line="1484"/>
         <source>Video</source>
         <translation>動画</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1476"/>
+        <location filename="../ssmm/main_window.py" line="1487"/>
         <source>Preview</source>
         <translation>プレビュー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1486"/>
+        <location filename="../ssmm/main_window.py" line="1497"/>
         <location filename="../ssmm/ui_main.py" line="374"/>
         <source>Total Estimated Duration: 0s</source>
         <translation>推定合計時間: 0秒</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1503"/>
+        <location filename="../ssmm/main_window.py" line="1514"/>
         <location filename="../ssmm/ui_main.py" line="333"/>
         <source>Select Project Folder</source>
         <translation>プロジェクトフォルダーを選択</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1515"/>
+        <location filename="../ssmm/main_window.py" line="1526"/>
         <location filename="../ssmm/ui_main.py" line="336"/>
         <source>Select Output Folder</source>
         <translation>出力フォルダーを選択</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1524"/>
+        <location filename="../ssmm/main_window.py" line="1535"/>
         <source>Invalid Folder Selection</source>
         <translation>無効なフォルダーの選択です</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1525"/>
+        <location filename="../ssmm/main_window.py" line="1536"/>
         <source>The output folder cannot be the same as the project folder.
 
 Please select a different directory to avoid conflicts with source material files.</source>
@@ -825,90 +827,90 @@ Please select a different directory to avoid conflicts with source material file
 素材ファイルとの競合を避けるため、別のディレクトリを選択してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1541"/>
+        <location filename="../ssmm/main_window.py" line="1552"/>
         <source>Confirm Reset</source>
         <translation>リセットの確認</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1541"/>
+        <location filename="../ssmm/main_window.py" line="1552"/>
         <source>Are you sure you want to reset all parameters to their default values?</source>
         <translation>すべてのパラメーターを既定値にリセットしてもよろしいですか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1548"/>
+        <location filename="../ssmm/main_window.py" line="1562"/>
         <source>Parameters Reset</source>
         <translation>パラメーターをリセットしました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1548"/>
+        <location filename="../ssmm/main_window.py" line="1562"/>
         <source>All parameters have been reset to their default values.</source>
         <translation>すべてのパラメーターが既定値にリセットされました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1554"/>
+        <location filename="../ssmm/main_window.py" line="1568"/>
         <source>Transition Gallery</source>
         <translation>トランジションギャラリー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1601"/>
-        <location filename="../ssmm/main_window.py" line="1611"/>
+        <location filename="../ssmm/main_window.py" line="1615"/>
+        <location filename="../ssmm/main_window.py" line="1625"/>
         <source>Confirm Exit</source>
         <translation>終了の確認</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1602"/>
+        <location filename="../ssmm/main_window.py" line="1616"/>
         <source>A task is currently running. Are you sure you want to exit?</source>
         <translation>現在タスクを実行中です。終了してもよろしいですか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1612"/>
+        <location filename="../ssmm/main_window.py" line="1626"/>
         <source>You have unsaved changes. Are you sure you want to exit?</source>
         <translation>保存されていない変更があります。本当に終了しますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1713"/>
+        <location filename="../ssmm/main_window.py" line="1727"/>
         <source>Project Folder Changed</source>
         <translation>プロジェクトフォルダーが変更されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1714"/>
+        <location filename="../ssmm/main_window.py" line="1728"/>
         <source>The contents of the project folder have been modified since the last validation.
 Please re-validate before proceeding.</source>
         <translation>前回の検証以降にプロジェクトフォルダーの内容が変更されています。
 続行する前に再検証してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1795"/>
+        <location filename="../ssmm/main_window.py" line="1809"/>
         <source>Settings have been applied to the selected slides.</source>
         <translation>設定が選択したスライドに適用されました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1837"/>
+        <location filename="../ssmm/main_window.py" line="1851"/>
         <source>A matching pair of ffmpeg and ffprobe executables was not found. This application requires FFmpeg.</source>
         <translation>ffmpeg と ffprobe の対応する実行ファイルが見つかりませんでした。このアプリケーションには FFmpeg が必要です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1840"/>
+        <location filename="../ssmm/main_window.py" line="1854"/>
         <source>As an alternative to a system-wide installation, you can create a folder named &apos;ffmpeg-bin&apos; in your user home directory and place both the ffmpeg and ffprobe executables inside it.</source>
         <translation>システム全体へのインストールの代わりに、ユーザーのホームディレクトリに &apos;ffmpeg-bin&apos; という名前のフォルダーを作成し、その中に ffmpeg と ffprobe の両方の実行ファイルを配置することもできます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1847"/>
+        <location filename="../ssmm/main_window.py" line="1861"/>
         <source>You can also use the &apos;Tools -&gt; Install FFmpeg...&apos; menu to install them system-wide.</source>
         <translation>「ツール -&gt; Install FFmpeg...」メニューを使用して、システム全体にインストールすることもできます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1862"/>
+        <location filename="../ssmm/main_window.py" line="1876"/>
         <source>PDF Error</source>
         <translation>PDFエラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1886"/>
+        <location filename="../ssmm/main_window.py" line="1900"/>
         <source>PDF Structure Changed</source>
         <translation>PDF の構造が変更されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1888"/>
+        <location filename="../ssmm/main_window.py" line="1902"/>
         <source>The number of pages in the PDF has changed from {0} to {1}.
 
 How would you like to proceed?</source>
@@ -917,51 +919,51 @@ How would you like to proceed?</source>
 どのように処理しますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1891"/>
+        <location filename="../ssmm/main_window.py" line="1905"/>
         <source>Migrate Settings (Experimental)</source>
         <translation>設定を移行 (実験的)</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1892"/>
+        <location filename="../ssmm/main_window.py" line="1906"/>
         <source>Re-initialize Project</source>
         <translation>プロジェクトを再初期化</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1893"/>
+        <location filename="../ssmm/main_window.py" line="1907"/>
         <location filename="../ssmm/ui_main.py" line="184"/>
         <source>Cancel</source>
         <translation>キャンセル</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1911"/>
+        <location filename="../ssmm/main_window.py" line="1925"/>
         <source>PDF Content Updated</source>
         <translation>PDF の内容が更新されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1912"/>
+        <location filename="../ssmm/main_window.py" line="1926"/>
         <source>The content of the PDF file was modified.
 Thumbnails have been automatically updated.</source>
         <translation>PDF ファイルの内容が変更されました。
 サムネイルは自動的に更新されました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1943"/>
+        <location filename="../ssmm/main_window.py" line="1957"/>
         <source>Error Initializing Project</source>
         <translation>プロジェクトの初期化エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1952"/>
-        <location filename="../ssmm/main_window.py" line="1956"/>
+        <location filename="../ssmm/main_window.py" line="1966"/>
+        <location filename="../ssmm/main_window.py" line="1970"/>
         <source>Migration Error</source>
         <translation>移行エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1956"/>
+        <location filename="../ssmm/main_window.py" line="1970"/>
         <source>Could not get details from the new PDF for an unknown reason.</source>
         <translation>不明な理由により、新しいPDFから詳細を取得できませんでした。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1973"/>
+        <location filename="../ssmm/main_window.py" line="1987"/>
         <source>Slide settings have been migrated to the new PDF structure.</source>
         <translation>スライド設定が新しい PDF の構造に移行されました。</translation>
     </message>
@@ -973,7 +975,7 @@ Thumbnails have been automatically updated.</source>
     </message>
     <message>
         <location filename="../ssmm/ui_main.py" line="167"/>
-        <location filename="../ssmm/ui_state_manager.py" line="120"/>
+        <location filename="../ssmm/ui_state_manager.py" line="126"/>
         <source>Check Files</source>
         <translation>ファイルを確認</translation>
     </message>
@@ -1317,7 +1319,7 @@ This will re-encode the final audio track.</source>
         <translation>検証の準備ができました。続行するには「ファイルを確認」をクリックしてください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/ui_state_manager.py" line="118"/>
+        <location filename="../ssmm/ui_state_manager.py" line="124"/>
         <source>Checking...</source>
         <translation>確認しています...</translation>
     </message>
@@ -1342,12 +1344,12 @@ This will re-encode the final audio track.</source>
         <translation>処理をキャンセルしています...</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1659"/>
+        <location filename="../ssmm/main_window.py" line="1673"/>
         <source>Unsaved Changes</source>
         <translation>保存されていない変更</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1660"/>
+        <location filename="../ssmm/main_window.py" line="1674"/>
         <source>You have unsaved changes that will be lost.
 
 Do you want to continue?</source>
@@ -1364,17 +1366,17 @@ Do you want to continue?</source>
         <translation>再生: {name}</translation>
     </message>
     <message>
-        <location filename="../ssmm/ui_dialogs.py" line="785"/>
+        <location filename="../ssmm/ui_dialogs.py" line="789"/>
         <source>Play/Pause</source>
         <translation>再生/一時停止</translation>
     </message>
     <message>
-        <location filename="../ssmm/ui_dialogs.py" line="908"/>
+        <location filename="../ssmm/ui_dialogs.py" line="912"/>
         <source>Playback Error</source>
         <translation>再生エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/ui_dialogs.py" line="909"/>
+        <location filename="../ssmm/ui_dialogs.py" line="913"/>
         <source>Could not play the material:
 {error}</source>
         <translation>素材を再生できませんでした:
@@ -1707,12 +1709,12 @@ This is faster and useful for exporting a single slide video.</source>
 <context>
     <name>SettingsManager</name>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="71"/>
+        <location filename="../ssmm/settings_manager.py" line="72"/>
         <source>Load Project</source>
         <translation>プロジェクトを読み込む</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="71"/>
+        <location filename="../ssmm/settings_manager.py" line="72"/>
         <source>Load settings from the default location?
 
 ({0})</source>
@@ -1721,48 +1723,48 @@ This is faster and useful for exporting a single slide video.</source>
 ({0})</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="78"/>
+        <location filename="../ssmm/settings_manager.py" line="79"/>
         <source>Load Project Settings File</source>
         <translation>プロジェクト設定ファイルを読み込む</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="78"/>
-        <location filename="../ssmm/settings_manager.py" line="405"/>
+        <location filename="../ssmm/settings_manager.py" line="79"/>
+        <location filename="../ssmm/settings_manager.py" line="428"/>
         <source>Project Settings (*.toml);;All Files (*)</source>
         <translation>プロジェクト設定 (*.toml);;すべてのファイル (*)</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="92"/>
+        <location filename="../ssmm/settings_manager.py" line="93"/>
         <source>Import DougaMeijin Project File</source>
         <translation>DougaMeijin プロジェクトファイルをインポート</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="93"/>
+        <location filename="../ssmm/settings_manager.py" line="94"/>
         <source>DougaMeijin Project (*.dmj);;All Files (*)</source>
         <translation>DougaMeijin Project (*.dmj);;All Files (*)</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="103"/>
+        <location filename="../ssmm/settings_manager.py" line="104"/>
         <source>Select a Folder to Extract the DougaMeijin Project Into</source>
         <translation>DougaMeijin プロジェクトの展開先フォルダーを選択</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="373"/>
+        <location filename="../ssmm/settings_manager.py" line="396"/>
         <source>Project Folder Not Set</source>
         <translation>プロジェクトフォルダーが未設定です</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="373"/>
+        <location filename="../ssmm/settings_manager.py" line="396"/>
         <source>Please select a project folder before saving settings.</source>
         <translation>設定を保存する前に、プロジェクトフォルダーを選択してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="379"/>
+        <location filename="../ssmm/settings_manager.py" line="402"/>
         <source>Save Project</source>
         <translation>プロジェクトを保存</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="379"/>
+        <location filename="../ssmm/settings_manager.py" line="402"/>
         <source>Save settings to the default location?
 
 ({0})</source>
@@ -1771,27 +1773,27 @@ This is faster and useful for exporting a single slide video.</source>
 ({0})</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="388"/>
+        <location filename="../ssmm/settings_manager.py" line="411"/>
         <source>Confirm Overwrite</source>
         <translation>上書きの確認</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="388"/>
+        <location filename="../ssmm/settings_manager.py" line="411"/>
         <source>&apos;{0}&apos; already exists. Do you want to overwrite it?</source>
         <translation>&apos;{0}&apos; は既に存在します。上書きしますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="404"/>
+        <location filename="../ssmm/settings_manager.py" line="427"/>
         <source>Save Project Settings As...</source>
         <translation>プロジェクト設定に名前を付けて保存...</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="459"/>
+        <location filename="../ssmm/settings_manager.py" line="482"/>
         <source>Error during hash calculation</source>
         <translation>ハッシュ計算中のエラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="459"/>
+        <location filename="../ssmm/settings_manager.py" line="482"/>
         <source>Could not generate integrity hash. Settings will not be saved.
 
 Details: {0}</source>
@@ -1800,26 +1802,26 @@ Details: {0}</source>
 詳細: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="509"/>
+        <location filename="../ssmm/settings_manager.py" line="532"/>
         <source>Success</source>
         <translation>成功</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="509"/>
+        <location filename="../ssmm/settings_manager.py" line="532"/>
         <source>Project settings saved to:
 {0}</source>
         <translation>プロジェクト設定を次の場所に保存しました:
 {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="486"/>
-        <location filename="../ssmm/settings_manager.py" line="505"/>
+        <location filename="../ssmm/settings_manager.py" line="509"/>
+        <location filename="../ssmm/settings_manager.py" line="528"/>
         <source>Error</source>
         <translation>エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/settings_manager.py" line="486"/>
-        <location filename="../ssmm/settings_manager.py" line="505"/>
+        <location filename="../ssmm/settings_manager.py" line="509"/>
+        <location filename="../ssmm/settings_manager.py" line="528"/>
         <source>Failed to save settings: {0}</source>
         <translation>設定の保存に失敗しました: {0}</translation>
     </message>
@@ -1967,22 +1969,6 @@ Details: {0}</source>
         <location filename="../ssmm/slide_table_manager.py" line="337"/>
         <source>Play audio/video</source>
         <translation>音声/動画を再生</translation>
-    </message>
-    <message>
-        <location filename="../ssmm/slide_table_manager.py" line="558"/>
-        <location filename="../ssmm/slide_table_manager.py" line="577"/>
-        <source>Success</source>
-        <translation>成功</translation>
-    </message>
-    <message>
-        <location filename="../ssmm/slide_table_manager.py" line="558"/>
-        <source>Transition &apos;{0}&apos; has been applied to all applicable slides.</source>
-        <translation>トランジション &apos;{0}&apos; が該当するすべてのスライドに適用されました。</translation>
-    </message>
-    <message>
-        <location filename="../ssmm/slide_table_manager.py" line="577"/>
-        <source>Interval of {0} seconds has been applied to all applicable slides.</source>
-        <translation>{0} 秒の間隔が、該当するすべてのスライドに適用されました。</translation>
     </message>
 </context>
 <context>

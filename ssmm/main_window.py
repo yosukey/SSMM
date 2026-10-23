@@ -1066,8 +1066,15 @@ class MainWindow(QWidget):
                 self.installer_thread = None
         
     def _start_project_load(self, path: Path):
-        # Single entry point for all project loads (folder, .toml, .dmj). Confirm
-        # first so unsaved edits to the current project aren't silently discarded.
+        # Single entry point for all project loads (folder, .toml, .dmj). Not while a
+        # render, validation or another load is running: the running task belongs to
+        # the current project (and the Open Recent menu is reachable at any time).
+        if self.state_machine.state in (AppState.PROCESSING, AppState.CANCELLING, AppState.VALIDATING,
+                                        AppState.LOADING_PROJECT, AppState.CHECKING_ENCODERS):
+            QMessageBox.information(self, self.tr("Please Wait"),
+                                    self.tr("A background task is still running. Please wait a moment and try again."))
+            return
+        # Confirm first so unsaved edits to the current project aren't silently discarded.
         if not self._confirm_discard_changes():
             return
         # A transient task (e.g. the background encoder test) would swallow the setup
@@ -1241,6 +1248,8 @@ class MainWindow(QWidget):
     def _on_update_check_finished(self, latest_version_tag: str, release_url: str, error: str):
         QApplication.restoreOverrideCursor()
         self.check_for_updates_action.setEnabled(True)
+        if self._update_worker is not None:
+            self._update_worker.deleteLater()
         self._update_worker = None
         if self._closing:
             return
@@ -1451,8 +1460,10 @@ class MainWindow(QWidget):
         is_cancelling = self.state_machine.state == AppState.CANCELLING
         
         QTimer.singleShot(0, lambda: self._show_processing_result(success, message, process_name))
-        
-        self.state_machine.transition_to(AppState.VALIDATED)
+
+        # Only the project that was rendered returns to VALIDATED.
+        if self.state_machine.state in (AppState.PROCESSING, AppState.CANCELLING):
+            self.state_machine.transition_to(AppState.VALIDATED)
 
         if is_cancelling:
              self.write_debug("[INFO] Process was canceled.", 'app')
@@ -1544,6 +1555,9 @@ class MainWindow(QWidget):
             self.project_model.parameters = ProjectParameters()
             self.project_model.parameters.available_encoders = current_encoders
             self._sync_model_to_ui()
+            # The sync runs with _is_syncing set, so refresh the resolution/watermark
+            # dependent thumbnails explicitly.
+            self.slide_table_manager.refresh_all_thumbnails()
             self.parameters_changed_event()
             QMessageBox.information(self, self.tr("Parameters Reset"), self.tr("All parameters have been reset to their default values."))
 
@@ -1785,7 +1799,7 @@ class MainWindow(QWidget):
                         if 'video_scale' in changes:
                             slide.video_scale = changes['video_scale']
                         if 'video_effects' in changes:
-                            slide.video_effects = changes['video_effects']
+                            slide.video_effects = list(changes['video_effects'])
             finally:
                 self.slide_table.blockSignals(False)
 
