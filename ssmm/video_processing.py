@@ -644,20 +644,20 @@ class VideoProcessor(QObject):
             null_device = "NUL" if sys.platform == "win32" else "/dev/null"
 
             self.log_message.emit(f"[INFO] Running 1st pass for {output_path.name}...", 'app')
-            video_opts_1 = self._get_video_encoding_options(params, pass_num=1)
+            video_opts_1 = self._get_video_encoding_options(params, pass_num=1, pass_log_prefix=pass_log_prefix)
             # The 1st pass discards its output to the null device with the null muxer
             # ('-f null'), since the device has no extension for ffmpeg to infer one.
             # Audio is kept mapped (it is cheap PCM) so that filter graphs with audio
             # outputs stay fully connected.
-            pass1_opts = base_output_options + ['-c:v', codec] + video_opts_1 + audio_opts + ['-f', 'null', '-passlogfile', pass_log_prefix]
+            pass1_opts = base_output_options + ['-c:v', codec] + video_opts_1 + audio_opts + ['-f', 'null']
             builder.set_output(null_device, pass1_opts)
             self._run_subprocess(builder.build())
             if self._get_is_canceled():
                 raise ProcessingCanceled()
 
             self.log_message.emit(f"[INFO] Running 2nd pass for {output_path.name}...", 'app')
-            video_opts_2 = self._get_video_encoding_options(params, pass_num=2)
-            pass2_opts = base_output_options + ['-c:v', codec] + video_opts_2 + audio_opts + ['-passlogfile', pass_log_prefix]
+            video_opts_2 = self._get_video_encoding_options(params, pass_num=2, pass_log_prefix=pass_log_prefix)
+            pass2_opts = base_output_options + ['-c:v', codec] + video_opts_2 + audio_opts
             builder.set_output(output_path, pass2_opts)
             self._run_subprocess(builder.build())
         else:
@@ -950,7 +950,28 @@ class VideoProcessor(QObject):
     def _get_final_audio_options(self, params: "ProjectParameters"):
         return ['-c:a', 'aac', '-b:a', params.audio_bitrate, '-ar', params.audio_sample_rate, '-ac', str(params.audio_channels)]
 
-    def _get_video_encoding_options(self, params: "ProjectParameters", pass_num: int = 1, is_single_pass_override: bool = False):
+    @staticmethod
+    def _quote_x265_param(value: str) -> str:
+        # -x265-params is a ':'-separated list parsed with av_get_token(), so a path
+        # (e.g. 'C:/...') must be single-quoted; a literal quote is written as '\''.
+        return "'" + value.replace('\\', '/').replace("'", "'\\''") + "'"
+
+    def _two_pass_options(self, codec: str, pass_num: int, pass_log_prefix: Optional[str]) -> list[str]:
+        if codec == 'libx265':
+            # FFmpeg's libx265 wrapper ignores the generic -pass/-passlogfile options
+            # (the stats file stays empty and both passes are identical); x265 needs
+            # its own pass/stats parameters.
+            params = f"pass={pass_num}"
+            if pass_log_prefix:
+                params += f":stats={self._quote_x265_param(pass_log_prefix + '-x265.log')}"
+            return ['-x265-params', params]
+        options = ['-pass', str(pass_num)]
+        if pass_log_prefix:
+            options += ['-passlogfile', pass_log_prefix]
+        return options
+
+    def _get_video_encoding_options(self, params: "ProjectParameters", pass_num: int = 1, is_single_pass_override: bool = False,
+                                    pass_log_prefix: Optional[str] = None):
         mode = params.encoding_mode
         value = params.encoding_value
         codec = self._resolve_codec_option(params.codec, params.hardware_encoding)
@@ -1037,7 +1058,7 @@ class VideoProcessor(QObject):
 
         if not is_single_pass_override and params.encoding_pass == "TWO_PASS" and mode != "QUALITY":
             if codec in config.TWO_PASS_ENCODERS:
-                options.extend(['-pass', str(pass_num)])
+                options.extend(self._two_pass_options(codec, pass_num, pass_log_prefix))
             elif codec in config.MULTIPASS_ENCODERS:
                 options.extend(['-multipass', 'fullres'])
 

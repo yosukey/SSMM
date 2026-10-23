@@ -249,3 +249,32 @@ def test_intermediate_segment_accepts_encoder_with_pcm(tmp_path, encoder):
                     "-f", "lavfi", "-i", "sine=d=0.5", "-t", "0.5", "-c:v", encoder, *extra, "-pix_fmt", "yuv420p",
                     "-c:a", config.INTERMEDIATE_AUDIO_CODEC, str(out)], check=True)
     assert out.stat().st_size > 0
+
+
+def test_libx265_two_pass_uses_x265_stats():
+    vp = VideoProcessor()
+    params = ProjectParameters(codec="H.265/HEVC", encoding_mode="VBR", encoding_value=3000, encoding_pass="TWO_PASS")
+    opts = vp._get_video_encoding_options(params, pass_num=2, pass_log_prefix="C:\\tmp\\o'k\\slide_001")
+    assert '-pass' not in opts and '-passlogfile' not in opts
+    assert opts[opts.index('-x265-params') + 1] == "pass=2:stats='C:/tmp/o'\\''k/slide_001-x265.log'"
+    x264 = ProjectParameters(codec="H.264/MPEG-4 AVC", encoding_mode="VBR", encoding_value=3000, encoding_pass="TWO_PASS")
+    opts = vp._get_video_encoding_options(x264, pass_num=1, pass_log_prefix="/tmp/p")
+    assert opts[opts.index('-passlogfile') + 1] == "/tmp/p"
+
+
+def test_av1_intermediate_support_check(monkeypatch, qapp):
+    import ssmm.validator as validator_module
+    from ssmm.models import ValidationMessages
+    av1 = ProjectParameters(codec="AV1")
+    if HAS_FFMPEG:
+        messages = ValidationMessages()
+        ProjectValidator()._check_intermediate_container_support(av1, messages)
+        assert not messages.has_errors()
+    # An FFmpeg that cannot write the container is reported as an error.
+    monkeypatch.setattr(validator_module, "get_ffmpeg_path", lambda: Path(shutil.which("false") or "/bin/false"))
+    messages = ValidationMessages()
+    ProjectValidator()._check_intermediate_container_support(av1, messages)
+    assert messages.has_errors()
+    messages = ValidationMessages()
+    ProjectValidator()._check_intermediate_container_support(ProjectParameters(codec="H.264/MPEG-4 AVC"), messages)
+    assert not messages.has_errors()

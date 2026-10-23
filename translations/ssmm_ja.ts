@@ -235,12 +235,12 @@ sudo apt update &amp;&amp; sudo apt install ffmpeg
         <translation>フォントライセンスファイルの読み込みに失敗しました: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1901"/>
+        <location filename="../ssmm/main_window.py" line="1918"/>
         <source>Could not process the PDF file: {0}</source>
         <translation>PDFファイルを処理できませんでした: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1910"/>
+        <location filename="../ssmm/main_window.py" line="1927"/>
         <source>Could not get details from the new PDF: {0}</source>
         <translation>新しいPDFから詳細を取得できませんでした: {0}</translation>
     </message>
@@ -486,8 +486,8 @@ Note: The app itself is licensed under the MIT License. That license applies to 
         <location filename="../ssmm/main_window.py" line="846"/>
         <location filename="../ssmm/main_window.py" line="1014"/>
         <location filename="../ssmm/main_window.py" line="1423"/>
-        <location filename="../ssmm/main_window.py" line="1753"/>
-        <location filename="../ssmm/main_window.py" line="1931"/>
+        <location filename="../ssmm/main_window.py" line="1770"/>
+        <location filename="../ssmm/main_window.py" line="1948"/>
         <source>Success</source>
         <translation>成功</translation>
     </message>
@@ -866,49 +866,49 @@ Please select a different directory to avoid conflicts with source material file
         <translation>保存されていない変更があります。本当に終了しますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1671"/>
+        <location filename="../ssmm/main_window.py" line="1688"/>
         <source>Project Folder Changed</source>
         <translation>プロジェクトフォルダーが変更されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1672"/>
+        <location filename="../ssmm/main_window.py" line="1689"/>
         <source>The contents of the project folder have been modified since the last validation.
 Please re-validate before proceeding.</source>
         <translation>前回の検証以降にプロジェクトフォルダーの内容が変更されています。
 続行する前に再検証してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1753"/>
+        <location filename="../ssmm/main_window.py" line="1770"/>
         <source>Settings have been applied to the selected slides.</source>
         <translation>設定が選択したスライドに適用されました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1795"/>
+        <location filename="../ssmm/main_window.py" line="1812"/>
         <source>A matching pair of ffmpeg and ffprobe executables was not found. This application requires FFmpeg.</source>
         <translation>ffmpeg と ffprobe の対応する実行ファイルが見つかりませんでした。このアプリケーションには FFmpeg が必要です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1798"/>
+        <location filename="../ssmm/main_window.py" line="1815"/>
         <source>As an alternative to a system-wide installation, you can create a folder named &apos;ffmpeg-bin&apos; in your user home directory and place both the ffmpeg and ffprobe executables inside it.</source>
         <translation>システム全体へのインストールの代わりに、ユーザーのホームディレクトリに &apos;ffmpeg-bin&apos; という名前のフォルダーを作成し、その中に ffmpeg と ffprobe の両方の実行ファイルを配置することもできます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1805"/>
+        <location filename="../ssmm/main_window.py" line="1822"/>
         <source>You can also use the &apos;Tools -&gt; Install FFmpeg...&apos; menu to install them system-wide.</source>
         <translation>「ツール -&gt; Install FFmpeg...」メニューを使用して、システム全体にインストールすることもできます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1820"/>
+        <location filename="../ssmm/main_window.py" line="1837"/>
         <source>PDF Error</source>
         <translation>PDFエラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1844"/>
+        <location filename="../ssmm/main_window.py" line="1861"/>
         <source>PDF Structure Changed</source>
         <translation>PDF の構造が変更されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1846"/>
+        <location filename="../ssmm/main_window.py" line="1863"/>
         <source>The number of pages in the PDF has changed from {0} to {1}.
 
 How would you like to proceed?</source>
@@ -917,51 +917,51 @@ How would you like to proceed?</source>
 どのように処理しますか?</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1849"/>
+        <location filename="../ssmm/main_window.py" line="1866"/>
         <source>Migrate Settings (Experimental)</source>
         <translation>設定を移行 (実験的)</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1850"/>
+        <location filename="../ssmm/main_window.py" line="1867"/>
         <source>Re-initialize Project</source>
         <translation>プロジェクトを再初期化</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1851"/>
+        <location filename="../ssmm/main_window.py" line="1868"/>
         <location filename="../ssmm/ui_main.py" line="184"/>
         <source>Cancel</source>
         <translation>キャンセル</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1869"/>
+        <location filename="../ssmm/main_window.py" line="1886"/>
         <source>PDF Content Updated</source>
         <translation>PDF の内容が更新されました</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1870"/>
+        <location filename="../ssmm/main_window.py" line="1887"/>
         <source>The content of the PDF file was modified.
 Thumbnails have been automatically updated.</source>
         <translation>PDF ファイルの内容が変更されました。
 サムネイルは自動的に更新されました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1901"/>
+        <location filename="../ssmm/main_window.py" line="1918"/>
         <source>Error Initializing Project</source>
         <translation>プロジェクトの初期化エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1910"/>
-        <location filename="../ssmm/main_window.py" line="1914"/>
+        <location filename="../ssmm/main_window.py" line="1927"/>
+        <location filename="../ssmm/main_window.py" line="1931"/>
         <source>Migration Error</source>
         <translation>移行エラー</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1914"/>
+        <location filename="../ssmm/main_window.py" line="1931"/>
         <source>Could not get details from the new PDF for an unknown reason.</source>
         <translation>不明な理由により、新しいPDFから詳細を取得できませんでした。</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1931"/>
+        <location filename="../ssmm/main_window.py" line="1948"/>
         <source>Slide settings have been migrated to the new PDF structure.</source>
         <translation>スライド設定が新しい PDF の構造に移行されました。</translation>
     </message>
@@ -1342,12 +1342,12 @@ This will re-encode the final audio track.</source>
         <translation>処理をキャンセルしています...</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1617"/>
+        <location filename="../ssmm/main_window.py" line="1634"/>
         <source>Unsaved Changes</source>
         <translation>保存されていない変更</translation>
     </message>
     <message>
-        <location filename="../ssmm/main_window.py" line="1618"/>
+        <location filename="../ssmm/main_window.py" line="1635"/>
         <source>You have unsaved changes that will be lost.
 
 Do you want to continue?</source>
@@ -1454,217 +1454,222 @@ Use the dropdown menu in each row to select the source of settings for the new p
 <context>
     <name>ProjectValidator</name>
     <message>
-        <location filename="../ssmm/validator.py" line="440"/>
+        <location filename="../ssmm/validator.py" line="441"/>
         <source>No PDF file found in the project folder.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The application requires exactly one PDF file in the selected project folder to serve as the base for the slideshow.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please add a single PDF file to your project folder and try again.</source>
         <translation>プロジェクトフォルダーに PDF ファイルが見つかりません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;本アプリケーションでは、スライドショーのベースとして、選択したプロジェクトフォルダーに PDF ファイルがちょうど1つ必要です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;プロジェクトフォルダーに PDF ファイルを1つ追加してから、もう一度お試しください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="466"/>
+        <location filename="../ssmm/validator.py" line="467"/>
         <source>The PDF file was modified, but the page structure is the same.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Note]&lt;/b&gt;&lt;br&gt;Thumbnails in the &apos;Slide Settings&apos; tab have been automatically updated to reflect the changes in the PDF content.</source>
         <translation>PDF ファイルが変更されましたが、ページ構造は同じです。&lt;br&gt;&lt;br&gt;&lt;b&gt;[注意]&lt;/b&gt;&lt;br&gt;「スライド設定」タブのサムネイルは、PDF 内容の変更を反映して自動的に更新されました。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="490"/>
+        <location filename="../ssmm/validator.py" line="491"/>
         <source>Material has not been assigned for slide(s): {0}.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;Every slide in the timeline must be assigned a video, an audio file, or explicitly marked as &apos;SILENT&apos;.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;In the &apos;Slide Settings&apos; tab, go to the specified slide row(s) and select a material from the dropdown menu. If a slide should only show the PDF page with no sound, select &apos;{1}&apos;.</source>
         <translation>次のスライドに素材が割り当てられていません: {0}。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;タイムライン上のすべてのスライドには、動画、音声ファイルのいずれかを割り当てるか、明示的に &apos;SILENT&apos; としてマークする必要があります。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「スライド設定」タブで、指定されたスライドの行に移動し、ドロップダウンメニューから素材を選択してください。スライドで音声なしに PDF ページのみを表示する場合は、&apos;{1}&apos; を選択してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="432"/>
+        <location filename="../ssmm/validator.py" line="433"/>
         <source>Multiple PDF files were found in the project folder.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The application requires exactly one PDF file to serve as the base for the slideshow.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please remove the extra PDF file(s) so that only one remains, then validate again.</source>
         <translation>プロジェクトフォルダー内に複数の PDF ファイルが見つかりました。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;スライドショーの元となる PDF ファイルは、ちょうど1つである必要があります。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;余分な PDF ファイルを取り除いて1つだけにしてから、もう一度検証してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="502"/>
+        <location filename="../ssmm/validator.py" line="503"/>
         <source>Could not create a hash for file {0}; it may be unreadable.</source>
         <translation>ファイル {0} のハッシュを作成できませんでした。読み取れない可能性があります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="558"/>
+        <location filename="../ssmm/validator.py" line="560"/>
         <source>The output filename is empty.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;An output filename is required. No project folder is set to use as a default name.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please enter a name in the &apos;Filename&apos; input box under Step 5.</source>
         <translation>出力ファイル名が空です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;出力ファイル名が必要です。デフォルト名として使用するプロジェクトフォルダーが設定されていません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;ステップ5の「ファイル名」入力ボックスに名前を入力してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="569"/>
+        <location filename="../ssmm/validator.py" line="571"/>
         <source>The effective output filename is empty.</source>
         <translation>実際の出力ファイル名が空です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="574"/>
+        <location filename="../ssmm/validator.py" line="576"/>
         <source>The filename contains invisible control characters, which are not allowed.</source>
         <translation>ファイル名に、許可されていない不可視の制御文字が含まれています。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="579"/>
+        <location filename="../ssmm/validator.py" line="581"/>
         <source>The filename contains an illegal character: &apos;{0}&apos;&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;Operating systems do not allow the characters &apos;{1}&apos; in filenames.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please remove the &apos;{2}&apos; character from the &apos;Filename&apos; input box.</source>
         <translation>ファイル名に使用できない文字が含まれています: &apos;{0}&apos;&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;オペレーティングシステムでは、ファイル名に &apos;{1}&apos; の文字を使用できません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「ファイル名」の入力欄から &apos;{2}&apos; の文字を削除してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="590"/>
+        <location filename="../ssmm/validator.py" line="592"/>
         <source>The filename is too long (max {0} bytes).&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please shorten the name in the &apos;Filename&apos; input box.</source>
         <translation>ファイル名が長すぎます (最大 {0} bytes)。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「ファイル名」入力欄で名前を短くしてください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="600"/>
+        <location filename="../ssmm/validator.py" line="602"/>
         <source>The filename &apos;{0}&apos; is a reserved system name.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please choose a different name in the &apos;Filename&apos; input box.</source>
         <translation>ファイル名「{0}」はシステムの予約名です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「ファイル名」入力ボックスで別の名前を選択してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="609"/>
+        <location filename="../ssmm/validator.py" line="611"/>
         <source>The filename cannot end with a period or a space.</source>
         <translation>ファイル名の末尾をピリオドまたはスペースにすることはできません。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="664"/>
+        <location filename="../ssmm/validator.py" line="666"/>
         <source>&lt;b&gt;Available Encoders (functional test passed):&lt;/b&gt;</source>
         <translation>&lt;b&gt;利用可能なエンコーダー (機能テストに合格):&lt;/b&gt;</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="707"/>
+        <location filename="../ssmm/validator.py" line="709"/>
         <source>Configuration error: No mapping found for codec &apos;{0}&apos; and hardware &apos;{1}&apos;.</source>
         <translation>構成エラー: コーデック &apos;{0}&apos; とハードウェア &apos;{1}&apos; に対応するマッピングが見つかりません。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="713"/>
+        <location filename="../ssmm/validator.py" line="715"/>
         <source>The selected hardware encoder &apos;{0}&apos; is not functional.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The application ran a quick test on the selected hardware encoder, and it failed to initialize. This is often caused by missing or outdated graphics drivers, or an unsupported hardware/FFmpeg combination.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;  • Ensure your graphics drivers (NVIDIA, Intel, AMD) are up to date.&lt;br&gt;  • In the &apos;Basic&apos; tab, select &apos;None&apos; for &apos;Hardware Encoding&apos; to use reliable software encoding.&lt;br&gt;  • Alternatively, try selecting a different Codec.</source>
         <translation>選択されたハードウェアエンコーダー &apos;{0}&apos; が機能していません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;アプリケーションが選択されたハードウェアエンコーダーで簡易テストを実行しましたが、初期化に失敗しました。これは多くの場合、グラフィックドライバーの欠落や古さ、またはサポートされていないハードウェアと FFmpeg の組み合わせが原因です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;  • グラフィックドライバー (NVIDIA、Intel、AMD) が最新であることを確認してください。&lt;br&gt;  • 「基本」タブで、「ハードウェアエンコード」に &apos;None&apos; を選択し、信頼性の高いソフトウェアエンコードを使用してください。&lt;br&gt;  • あるいは、別のコーデックを選択してみてください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="736"/>
+        <location filename="../ssmm/validator.py" line="738"/>
         <source>Material file &apos;{0}&apos; not found in project folder.</source>
         <translation>素材ファイル「{0}」がプロジェクトフォルダー内に見つかりません。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="743"/>
+        <location filename="../ssmm/validator.py" line="745"/>
         <source>Failed to process file &apos;{0}&apos;: {1}</source>
         <translation>ファイル &apos;{0}&apos; の処理に失敗しました: {1}</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="758"/>
+        <location filename="../ssmm/validator.py" line="760"/>
         <source>Could not retrieve cached info for this file. It might be unreadable.</source>
         <translation>このファイルのキャッシュ情報を取得できませんでした。読み取れない可能性があります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="796"/>
+        <location filename="../ssmm/validator.py" line="798"/>
         <source>No audio stream found.</source>
         <translation>音声ストリームが見つかりませんでした。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="820"/>
+        <location filename="../ssmm/validator.py" line="822"/>
         <source>Could not generate report detail: {0}</source>
         <translation>レポートの詳細を生成できませんでした: {0}</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="893"/>
+        <location filename="../ssmm/validator.py" line="895"/>
         <source>FFmpeg version ({0}) and ffprobe version ({1}) do not match.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The application found two different versions of FFmpeg tools on your system. Using mismatched versions can lead to unexpected errors during video processing.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;It is highly recommended to install a matching pair of ffmpeg and ffprobe from the same official build to ensure stability.</source>
         <translation>FFmpegのバージョン ({0}) とffprobeのバージョン ({1}) が一致しません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;システム上で異なる2つのバージョンのFFmpegツールが見つかりました。一致しないバージョンを使用すると、動画処理中に予期しないエラーが発生する可能性があります。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;安定動作のため、同じ公式ビルドから一致するffmpegとffprobeのペアをインストールすることを強くお勧めします。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="904"/>
+        <location filename="../ssmm/validator.py" line="906"/>
         <source>FFmpeg was not found. This application requires a matching pair of ffmpeg and ffprobe to function.</source>
         <translation>FFmpeg が見つかりませんでした。本アプリケーションが動作するには、対応する ffmpeg と ffprobe のペアが必要です。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="906"/>
+        <location filename="../ssmm/validator.py" line="908"/>
         <source>&lt;b&gt;[Option 1: Manual Install]&lt;/b&gt;&lt;br&gt;Create a folder named &apos;ffmpeg-bin&apos; in your user home directory and place both the ffmpeg and ffprobe executables inside it. The application will automatically detect them.</source>
         <translation>&lt;b&gt;[オプション1: 手動インストール]&lt;/b&gt;&lt;br&gt;ユーザーのホームディレクトリに &apos;ffmpeg-bin&apos; という名前のフォルダーを作成し、その中に ffmpeg と ffprobe の両方の実行ファイルを配置してください。アプリケーションが自動的に検出します。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="913"/>
+        <location filename="../ssmm/validator.py" line="915"/>
         <source>&lt;b&gt;[Option 2: Automatic Install]&lt;/b&gt;&lt;br&gt;Use the &apos;Tools -&gt; Install FFmpeg...&apos; menu to let the application attempt a system-wide installation for you.</source>
         <translation>&lt;b&gt;[オプション2: 自動インストール]&lt;/b&gt;&lt;br&gt;「ツール -&gt; Install FFmpeg...」メニューを使用すると、アプリケーションがシステム全体へのインストールを試みます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="923"/>
+        <location filename="../ssmm/validator.py" line="925"/>
         <source>FFmpeg was found, but no functional video encoder could be detected.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The application tested the detected FFmpeg build, but none of the supported encoders (such as libx264 or libx265) could be initialized. This usually means the build is incomplete or incompatible -- for example, a wrong CPU architecture, a minimal build without encoders, or an executable that lacks run permission.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;  • Install a full FFmpeg build that includes the standard encoders.&lt;br&gt;  • On macOS/Linux, ensure the ffmpeg and ffprobe files are executable.&lt;br&gt;  • If you placed binaries in &apos;~/ffmpeg-bin&apos;, verify they run correctly, then restart the application.</source>
         <translation>FFmpeg は見つかりましたが、機能する動画エンコーダーを検出できませんでした。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;アプリケーションが検出された FFmpeg ビルドをテストしましたが、サポートされているエンコーダー (libx264 や libx265 など) のいずれも初期化できませんでした。これは通常、ビルドが不完全であるか互換性がないことを意味します。たとえば、CPU アーキテクチャの誤り、エンコーダーを含まない最小構成のビルド、または実行権限のない実行ファイルなどです。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;  • 標準的なエンコーダーを含む完全な FFmpeg ビルドをインストールしてください。&lt;br&gt;  • macOS/Linux では、ffmpeg および ffprobe ファイルが実行可能であることを確認してください。&lt;br&gt;  • バイナリを &apos;~/ffmpeg-bin&apos; に配置した場合は、正しく実行できることを確認してから、アプリケーションを再起動してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="952"/>
+        <location filename="../ssmm/validator.py" line="954"/>
         <source>PDF page {0} has zero height and its aspect ratio cannot be checked.</source>
         <translation>PDFの{0}ページ目の高さが0であるため、アスペクト比を確認できません。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="958"/>
+        <location filename="../ssmm/validator.py" line="960"/>
         <source>The aspect ratio of the PDF does not match the video resolution (on pages: {0}).&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The shape (width-to-height ratio) of one or more PDF pages is different from the shape of the selected video resolution (e.g., a square PDF with a widescreen video setting).&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;You can either:&lt;br&gt;  • Go to the &apos;Basic&apos; tab and change the &apos;Resolution&apos; to one that matches the PDF&apos;s aspect ratio.&lt;br&gt;  • Edit the original PDF document to match your desired video aspect ratio.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Note]&lt;/b&gt;&lt;br&gt;If you proceed, black bars (padding) will be automatically added to the sides or top/bottom of the PDF images to make them fit the video frame.</source>
         <translation>PDF のアスペクト比が動画の解像度と一致しません (該当ページ: {0})。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;1つ以上の PDF ページの形状 (幅と高さの比率) が、選択した動画の解像度の形状と異なっています (例: 正方形の PDF にワイドスクリーンの動画設定)。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;次のいずれかを行ってください:&lt;br&gt;  • 「基本」タブを開き、「解像度」を PDF のアスペクト比に合うものに変更する。&lt;br&gt;  • 元の PDF 文書を、希望する動画のアスペクト比に合うように編集する。&lt;br&gt;&lt;br&gt;&lt;b&gt;[注意]&lt;/b&gt;&lt;br&gt;そのまま続行すると、PDF 画像を動画フレームに収めるために、左右または上下に黒帯 (パディング) が自動的に追加されます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="971"/>
+        <location filename="../ssmm/validator.py" line="973"/>
         <source>Failed to open or process PDF file: {0}. Error: {1}</source>
         <translation>PDF ファイルを開けない、または処理できませんでした: {0}。エラー: {1}</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="978"/>
+        <location filename="../ssmm/validator.py" line="980"/>
         <source>Incompatible settings: Apple VideoToolbox does not support Quality (CRF/CQP) mode.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The selected hardware encoder (&apos;Enabled (Apple Hardware)&apos; on the &apos;Basic&apos; tab) does not work with the &apos;Quality (CQP/CRF)&apos; setting on the &apos;Video Options&apos; tab.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;In the &apos;Video Options&apos; tab, please change the &apos;Encoding Mode&apos; to either &apos;Bitrate (VBR)&apos; or &apos;Bitrate (CBR)&apos;.</source>
         <translation>互換性のない設定: Apple VideoToolbox は Quality (CRF/CQP) モードをサポートしていません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;選択されているハードウェアエンコーダー (「基本」タブの &apos;Enabled (Apple Hardware)&apos;) は、「動画オプション」タブの &apos;Quality (CQP/CRF)&apos; 設定では動作しません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「動画オプション」タブで、「エンコードモード」を &apos;Bitrate (VBR)&apos; または &apos;Bitrate (CBR)&apos; のいずれかに変更してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="990"/>
+        <location filename="../ssmm/validator.py" line="992"/>
         <source>The selected encoder &apos;{0}&apos; does not support 2-pass encoding; it will encode in a single pass.</source>
         <translation>選択したエンコーダー「{0}」は2パスエンコードに対応していないため、1パスでエンコードします。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="995"/>
+        <location filename="../ssmm/validator.py" line="1024"/>
+        <source>The installed FFmpeg cannot write the intermediate files needed for AV1.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;AV1 segments are stored as MP4 with uncompressed audio, which requires FFmpeg 6.0 or later.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Update FFmpeg, or select a different codec in the &apos;Basic&apos; tab.</source>
+        <translation>インストールされている FFmpeg では、AV1 に必要な中間ファイルを書き出せません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;AV1 の中間ファイルは非圧縮音声付きの MP4 として保存するため、FFmpeg 6.0 以降が必要です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;FFmpeg を更新するか、「基本」タブで別のコーデックを選択してください。</translation>
+    </message>
+    <message>
+        <location filename="../ssmm/validator.py" line="1033"/>
         <source>YouTube chapter export is enabled, but no chapters have been set.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;The &apos;Export chapter file for YouTube&apos; option is checked in the &apos;Video Options&apos; tab, but no chapter titles have been entered in the &apos;Slide Settings&apos; tab.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Either add chapter titles to your slides or disable the export option.</source>
         <translation>YouTube チャプターのエクスポートが有効になっていますが、チャプターが設定されていません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;「動画オプション」タブで「Export chapter file for YouTube」オプションがオンになっていますが、「スライド設定」タブでチャプタータイトルが入力されていません。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;スライドにチャプタータイトルを追加するか、エクスポートオプションを無効にしてください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1012"/>
+        <location filename="../ssmm/validator.py" line="1050"/>
         <source>YouTube chapters must start from the beginning of the video (Slide 1).&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;YouTube requires the first chapter to have a timestamp of 00:00. This means Slide 1 must have a chapter title.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;In the &apos;Slide Settings&apos; tab, please enter a title for the &apos;Chapter Title&apos; field on the row for Slide 1.</source>
         <translation>YouTubeのチャプターは動画の先頭 (スライド1) から開始する必要があります。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;YouTubeでは、最初のチャプターのタイムスタンプが00:00である必要があります。つまり、スライド1にチャプタータイトルが必要です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「スライド設定」タブで、スライド1の行の「チャプタータイトル」フィールドにタイトルを入力してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1022"/>
+        <location filename="../ssmm/validator.py" line="1060"/>
         <source>YouTube requires at least 3 chapters, but only {0} were found.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;To be considered a valid chapter list, YouTube&apos;s policy requires a minimum of three chapter entries.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;Please add more chapter titles in the &apos;Slide Settings&apos; tab until you have at least three.</source>
         <translation>YouTube では少なくとも3つのチャプターが必要ですが、{0} 個しか見つかりませんでした。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;有効なチャプターリストとして認められるには、YouTube のポリシー上、最低3つのチャプター項目が必要です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;「スライド設定」タブで、少なくとも3つになるまでチャプタータイトルを追加してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1035"/>
+        <location filename="../ssmm/validator.py" line="1073"/>
         <source>The chapter &apos;{0}&apos; (on Slide {1}) is only {2:.1f} seconds long.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;YouTube requires each chapter to be a minimum of 10 seconds long.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;To make this chapter longer, you can increase the &apos;Duration&apos; or &apos;Interval to Next&apos; of the slide(s) it contains, or merge it with an adjacent chapter by removing its title.</source>
         <translation>チャプター「{0}」(スライド {1}) の長さはわずか {2:.1f} 秒です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;YouTube では各チャプターの長さは最低 10 秒必要です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;このチャプターを長くするには、含まれるスライドの「長さ」または「次までの間隔」を増やすか、タイトルを削除して隣接するチャプターと結合してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1059"/>
+        <location filename="../ssmm/validator.py" line="1097"/>
         <source>This is a Variable Frame Rate (VFR) video. It will be automatically converted to a constant frame rate to prevent sync issues, but please check the final output carefully.</source>
         <translation>これは可変フレームレート (VFR) の動画です。同期の問題を防ぐために自動的に固定フレームレートへ変換されますが、最終的な出力を注意深く確認してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1061"/>
+        <location filename="../ssmm/validator.py" line="1099"/>
         <source>This video appears to be interlaced. It will be automatically deinterlaced for smooth playback.</source>
         <translation>この動画はインターレース化されているようです。スムーズな再生のため、自動的にインターレース解除されます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1063"/>
+        <location filename="../ssmm/validator.py" line="1101"/>
         <source>This is a vertical video and will be automatically rotated to the correct orientation.</source>
         <translation>これは縦向きの動画であり、正しい向きに自動的に回転されます。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1074"/>
+        <location filename="../ssmm/validator.py" line="1112"/>
         <source>Source FPS ({0}) is higher than the output FPS ({1}). This may result in less smooth motion as frames will be dropped.</source>
         <translation>ソースの FPS ({0}) が出力の FPS ({1}) より高くなっています。フレームが間引かれるため、動きの滑らかさが低下する可能性があります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1081"/>
+        <location filename="../ssmm/validator.py" line="1119"/>
         <source>This video will be upscaled from {0}px to {1}px height, which may reduce its visual quality.</source>
         <translation>この動画は高さ {0}px から {1}px にアップスケールされるため、画質が低下する可能性があります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1083"/>
+        <location filename="../ssmm/validator.py" line="1121"/>
         <source>This video will be scaled to {0}px width, which is wider than the output frame ({1}px).</source>
         <translation>この動画は幅 {0}px に拡大されますが、これは出力フレーム ({1}px) よりも広くなります。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1090"/>
+        <location filename="../ssmm/validator.py" line="1128"/>
         <source>&lt;i&gt;Note: Some Picture-in-Picture previews may look stretched. This is to accurately reflect the Display Aspect Ratio (DAR/SAR) metadata from the source file, which prevents distortion in the final video.&lt;/i&gt;</source>
         <translation>&lt;i&gt;注意: 一部の Picture-in-Picture プレビューは引き伸ばされて見えることがあります。これは、ソースファイルの Display Aspect Ratio (DAR/SAR) メタデータを正確に反映するためで、最終的な動画での歪みを防ぎます。&lt;/i&gt;</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1095"/>
+        <location filename="../ssmm/validator.py" line="1133"/>
         <source>Slide {0} (&apos;{1}&apos;) has a transition with zero interval.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Cause]&lt;/b&gt;&lt;br&gt;A transition effect (e.g., &apos;Fade&apos;) has been selected, but the time allocated for it (&apos;Interval to Next&apos;) is 0 seconds.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Action]&lt;/b&gt;&lt;br&gt;In the &apos;Slide Settings&apos; tab for this slide, either increase the &apos;Interval to Next&apos; to a value greater than 0 (e.g., 1 second) or set the &apos;Transition to Next&apos; back to &apos;None&apos;.</source>
         <translation>スライド{0} (「{1}」) のトランジションの間隔が0です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[原因]&lt;/b&gt;&lt;br&gt;トランジションエフェクト (例: &apos;Fade&apos;) が選択されていますが、それに割り当てられた時間 (「次までの間隔」) が0秒です。&lt;br&gt;&lt;br&gt;&lt;b&gt;[対処]&lt;/b&gt;&lt;br&gt;このスライドの「スライド設定」タブで、「次までの間隔」を0より大きい値 (例: 1秒) に増やすか、「次へのトランジション」を &apos;None&apos; に戻してください。</translation>
     </message>
     <message>
-        <location filename="../ssmm/validator.py" line="1105"/>
+        <location filename="../ssmm/validator.py" line="1143"/>
         <source>Encoding with the {0} codec in software mode may be significantly slower than H.264.&lt;br&gt;&lt;br&gt;&lt;b&gt;[Note]&lt;/b&gt;&lt;br&gt;This is not an error. It&apos;s an advisory that video creation may take longer. Using hardware encoding, if available, can speed this up.</source>
         <translation>ソフトウェアモードで {0} コーデックを使用したエンコードは、H.264 よりも大幅に遅くなる場合があります。&lt;br&gt;&lt;br&gt;&lt;b&gt;[注意]&lt;/b&gt;&lt;br&gt;これはエラーではありません。動画の作成に時間がかかる可能性があることをお知らせするものです。利用可能であれば、ハードウェアエンコードを使用することで高速化できます。</translation>
     </message>

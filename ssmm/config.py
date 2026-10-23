@@ -36,6 +36,8 @@ WAVEFORM_COLOR = "#8b97e6"
 PROCESS_START_TIMEOUT_MS = 10000
 LOUDNORM_ANALYSIS_TIMEOUT_S = 600
 UPDATE_CHECK_TIMEOUT_S = 5
+# How long closing the window waits for its own helper threads before terminating them.
+CHILD_THREAD_JOIN_TIMEOUT_MS = 8000
 # Keep the in-app debug log bounded during long renders.
 DEBUG_LOG_MAX_LINES = 20000
 # Characters of FFmpeg output kept for error reports when output is not captured.
@@ -123,8 +125,9 @@ ENCODER_TEST_FRAMERATE = "30"
 ENCODER_TEST_DURATION_S = 1
 
 PDF_THUMBNAIL_ZOOM_FACTOR = 0.25
-# Points-to-pixels scale used when rendering pages for p-hash and thumbnails.
-PDF_DETAIL_RENDER_SCALE = 1.0
+# Points-to-pixels scale used when rendering pages for p-hash and thumbnails. Keep it
+# stable: p-hashes stored in settings.toml are compared against newly computed ones.
+PDF_DETAIL_RENDER_SCALE = 2.0
 PDF_THUMBNAIL_HEIGHT = 300
 INTERVAL_RANGE = (0, 300)
 WATERMARK_OPACITY_RANGE = (0, 100)

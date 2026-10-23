@@ -1578,6 +1578,7 @@ class MainWindow(QWidget):
         app_settings.set_window_geometry(self.saveGeometry())
 
         # Stop and join every background thread before the window is destroyed.
+        self._join_child_threads()
         self.worker_manager.cancel_all_tasks()
         self.worker_manager.shutdown_transient_worker()
 
@@ -1593,6 +1594,22 @@ class MainWindow(QWidget):
         self.worker_manager.shutdown_persistent_workers()
 
         event.accept()
+
+    def _join_child_threads(self):
+        # QThreads parented to this window (the update check, the media player's
+        # waveform loader) are destroyed with it; destroying a running QThread aborts
+        # the process, so wait for them first. Both are bounded by their own network
+        # or subprocess timeouts; terminate only as a last resort on exit.
+        update_worker = getattr(self, '_update_worker', None)
+        if update_worker is not None:
+            try:
+                update_worker.result_ready.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+        for thread in self.findChildren(QThread):
+            if thread.isRunning() and not thread.wait(config.CHILD_THREAD_JOIN_TIMEOUT_MS):
+                thread.terminate()
+                thread.wait()
 
     def parameters_changed_event(self, _=None):
         self._mark_dirty()
