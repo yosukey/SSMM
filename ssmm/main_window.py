@@ -3,6 +3,7 @@ import copy
 import datetime
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from urllib import request
@@ -10,7 +11,7 @@ from packaging.version import InvalidVersion, parse as parse_version
 from typing import Optional, Callable
 
 from PySide6.QtCore import (QItemSelection, QItemSelectionModel, QObject, Qt,
-                            QThread, QTimer, QUrl, Signal, QStandardPaths)
+                            QTimer, QUrl, Signal, QStandardPaths)
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QMovie,
                            QPalette, QTextCharFormat, QTextCursor, QShowEvent)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
@@ -139,24 +140,41 @@ class EmittingStream(QObject):
         self._buffer = ""
 
 
-class UpdateCheckWorker(QThread):
-    """Queries the latest GitHub release off the GUI thread."""
+class UpdateChecker(QObject):
+    """Queries the latest GitHub release without blocking the GUI thread.
+
+    The request runs on a daemon thread rather than a QThread: a slow network (or DNS
+    lookup) can then never block or abort quitting the application. The result is
+    delivered to the GUI thread through a queued signal.
+    """
     result_ready = Signal(str, str, str)  # latest version tag, release url, error message
 
     def __init__(self, api_url: str, parent=None):
         super().__init__(parent)
         self._api_url = api_url
+        self._thread = None
 
-    def run(self):
+    def start(self):
+        self._thread = threading.Thread(target=self._run, name="ssmm-update-check", daemon=True)
+        self._thread.start()
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self):
         try:
             req = request.Request(self._api_url, headers={'Accept': 'application/vnd.github.v3+json'})
             with request.urlopen(req, timeout=config.UPDATE_CHECK_TIMEOUT_S) as response:
                 if response.status != 200:
                     raise ConnectionError(f"GitHub API returned status {response.status}")
                 data = json.loads(response.read().decode('utf-8'))
-            self.result_ready.emit(data.get("tag_name", "v0.0.0").lstrip('v'), data.get("html_url", ""), "")
+            result = (data.get("tag_name", "v0.0.0").lstrip('v'), data.get("html_url", ""), "")
         except Exception as e:
-            self.result_ready.emit("", "", str(e))
+            result = ("", "", str(e))
+        try:
+            self.result_ready.emit(*result)
+        except RuntimeError:
+            pass  # the window was closed and this object deleted meanwhile
 
 class MainWindow(QWidget):
     __version__ = config.APP_VERSION
@@ -165,6 +183,7 @@ class MainWindow(QWidget):
         super().__init__()
         
         self._project_path_on_startup = project_path_on_startup
+        self._closing = False
         self._is_first_activation = True
         self._next_startup_action: Optional[Callable] = None
         
@@ -851,6 +870,7 @@ class MainWindow(QWidget):
         if self._is_syncing or not new_codec or new_codec == "No Encoders Found":
             return
 
+        previous_codec = self.project_model.parameters.codec
         self.project_model.parameters.codec = new_codec
 
         self.update_hardware_encoding_options(new_codec)
@@ -870,7 +890,7 @@ class MainWindow(QWidget):
             self.hardware_encoding_combo.setCurrentIndex(index_to_set)
         self.hardware_encoding_combo.blockSignals(False)
 
-        self._refresh_encoding_options_preserving_value()
+        self._refresh_encoding_options_preserving_value(previous_codec)
 
     def on_hardware_encoding_changed(self):
         if self._is_syncing:
@@ -878,15 +898,27 @@ class MainWindow(QWidget):
         self.project_model.parameters.hardware_encoding = self.hardware_encoding_combo.currentData()
         self._refresh_encoding_options_preserving_value()
 
-    def _refresh_encoding_options_preserving_value(self):
+    @staticmethod
+    def _value_scale(codec: str, mode: str) -> str:
+        # The unit of the encoding value: kbps in the bitrate modes; in quality mode
+        # MPEG-4 uses qscale (1-31) while the other codecs use CRF/CQP (0-51).
+        if mode != "QUALITY":
+            return "kbps"
+        return "qscale" if codec == 'MPEG-4 Part 2' else "crf"
+
+    def _refresh_encoding_options_preserving_value(self, previous_codec: Optional[str] = None):
         # update_encoding_options() resets the value spin to a mode default. Changing
         # only the codec/encoder should not discard the user's quality/bitrate, so
         # preserve it across the refresh (clamped to the new range). If the refresh
-        # forces a different mode (e.g. VideoToolbox → VBR), keep that mode's default.
+        # forces a different mode (e.g. VideoToolbox → VBR), or the value would change
+        # meaning (MPEG-4 qscale 4 is not CRF 4), keep the new default instead.
         preserved_value = self.value_spin.value()
         preserved_mode = self.encoding_mode_combo.currentData()
+        current_codec = self.codec_combo.currentText()
+        same_scale = (previous_codec is None or
+                      self._value_scale(previous_codec, preserved_mode) == self._value_scale(current_codec, preserved_mode))
         self.update_encoding_options()
-        if self.encoding_mode_combo.currentData() == preserved_mode:
+        if self.encoding_mode_combo.currentData() == preserved_mode and same_scale:
             clamped = max(self.value_spin.minimum(), min(self.value_spin.maximum(), preserved_value))
             self.value_spin.setValue(clamped)
         self._sync_ui_to_model()
@@ -911,7 +943,11 @@ class MainWindow(QWidget):
     def on_parameter_changed(self):
         if self._is_syncing:
             return
+        previous_resolution = self.project_model.parameters.resolution
         self._sync_ui_to_model()
+        if self.project_model.parameters.resolution != previous_resolution:
+            # Thumbnails are framed to the output aspect ratio (letterbox, PinP box).
+            self.slide_table_manager.refresh_all_thumbnails()
         self.parameters_changed_event()
 
     def on_cosmetic_parameter_changed(self):
@@ -1098,11 +1134,15 @@ class MainWindow(QWidget):
 
         # Record the successfully loaded project in the recent list. A DougaMeijin
         # import is recorded as the extracted project folder: re-opening the .dmj
-        # would extract another copy and drop the edits made since the import.
+        # would extract yet another copy of it.
         if self._pending_recent_path:
             recent_path = self._pending_recent_path
             if recent_path.suffix.lower() == '.dmj' and self.project_model.project_folder:
                 recent_path = self.project_model.project_folder
+                # Write the imported settings next to the extracted files, so that
+                # reopening the folder (e.g. from the recent list) restores them
+                # instead of rebuilding a blank project from the PDF.
+                self.settings_manager._perform_save(recent_path / "settings.toml", self.project_model, notify=False)
             app_settings.add_recent_project(str(recent_path))
             self._pending_recent_path = None
             self._rebuild_recent_menu()
@@ -1184,7 +1224,7 @@ class MainWindow(QWidget):
             self.write_debug(f"[INFO] Skipping update check for development version '{self.__version__}'.", 'app')
             QMessageBox.information(self, self.tr("Update Check Skipped"), self.tr("Running in local-dev mode. Update check skipped."))
             return
-        if getattr(self, '_update_worker', None) is not None and self._update_worker.isRunning():
+        if getattr(self, '_update_worker', None) is not None and self._update_worker.is_running():
             return
 
         self.write_debug("[INFO] --- Manually checking for application updates ---", 'app')
@@ -1194,15 +1234,16 @@ class MainWindow(QWidget):
         # The request runs on a worker thread so a slow network cannot freeze the UI.
         self.check_for_updates_action.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        self._update_worker = UpdateCheckWorker(api_url, self)
+        self._update_worker = UpdateChecker(api_url, self)
         self._update_worker.result_ready.connect(self._on_update_check_finished)
-        self._update_worker.finished.connect(self._update_worker.deleteLater)
         self._update_worker.start()
 
     def _on_update_check_finished(self, latest_version_tag: str, release_url: str, error: str):
         QApplication.restoreOverrideCursor()
         self.check_for_updates_action.setEnabled(True)
         self._update_worker = None
+        if self._closing:
+            return
 
         latest = self._release_version(latest_version_tag) if not error else None
         if error or latest is None:
@@ -1578,7 +1619,7 @@ class MainWindow(QWidget):
         app_settings.set_window_geometry(self.saveGeometry())
 
         # Stop and join every background thread before the window is destroyed.
-        self._join_child_threads()
+        self._closing = True
         self.worker_manager.cancel_all_tasks()
         self.worker_manager.shutdown_transient_worker()
 
@@ -1594,22 +1635,6 @@ class MainWindow(QWidget):
         self.worker_manager.shutdown_persistent_workers()
 
         event.accept()
-
-    def _join_child_threads(self):
-        # QThreads parented to this window (the update check, the media player's
-        # waveform loader) are destroyed with it; destroying a running QThread aborts
-        # the process, so wait for them first. Both are bounded by their own network
-        # or subprocess timeouts; terminate only as a last resort on exit.
-        update_worker = getattr(self, '_update_worker', None)
-        if update_worker is not None:
-            try:
-                update_worker.result_ready.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-        for thread in self.findChildren(QThread):
-            if thread.isRunning() and not thread.wait(config.CHILD_THREAD_JOIN_TIMEOUT_MS):
-                thread.terminate()
-                thread.wait()
 
     def parameters_changed_event(self, _=None):
         self._mark_dirty()

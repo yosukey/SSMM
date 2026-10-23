@@ -36,8 +36,6 @@ WAVEFORM_COLOR = "#8b97e6"
 PROCESS_START_TIMEOUT_MS = 10000
 LOUDNORM_ANALYSIS_TIMEOUT_S = 600
 UPDATE_CHECK_TIMEOUT_S = 5
-# How long closing the window waits for its own helper threads before terminating them.
-CHILD_THREAD_JOIN_TIMEOUT_MS = 8000
 # Keep the in-app debug log bounded during long renders.
 DEBUG_LOG_MAX_LINES = 20000
 # Characters of FFmpeg output kept for error reports when output is not captured.
