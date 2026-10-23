@@ -97,6 +97,7 @@ class VideoProcessor(QObject):
         self._current_step = 0
         self._total_steps = 1
         self._is_verbose = False
+        self._segment_ext = config.INTERMEDIATE_CONTAINER
 
     def _set_canceled(self, value: bool):
         with self._is_canceled_lock:
@@ -236,9 +237,12 @@ class VideoProcessor(QObject):
             builder.add_global_options('-loglevel', 'info')
         return builder
 
+    def _segment_path(self, folder: Path, stem: str) -> Path:
+        return folder / f"{stem}{self._segment_ext}"
+
     @staticmethod
-    def _segment_path(folder: Path, stem: str) -> Path:
-        return folder / f"{stem}{config.INTERMEDIATE_CONTAINER}"
+    def _intermediate_container_for(codec: str) -> str:
+        return config.INTERMEDIATE_CONTAINER_AV1 if 'av1' in codec else config.INTERMEDIATE_CONTAINER
 
     def run_video_creation(self, project_model: ProjectModel):
         with SleepInhibitor(self.log_message.emit):
@@ -440,6 +444,8 @@ class VideoProcessor(QObject):
 
     def _setup_processing(self, params: ProjectParameters, temp_folder: Path) -> str:
         codec_option = self._resolve_codec_option(params.codec, params.hardware_encoding)
+        # Every segment of this run must share one container for the concat demuxer.
+        self._segment_ext = self._intermediate_container_for(codec_option)
 
         if params.add_watermark and params.watermark_text:
             try:

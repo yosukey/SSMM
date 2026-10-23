@@ -97,8 +97,11 @@ TWO_PASS_ENCODERS = frozenset({"libx264", "libx265", "libaom-av1", "mpeg4"})
 MULTIPASS_ENCODERS = frozenset({"h264_nvenc", "hevc_nvenc", "av1_nvenc"})
 
 # Intermediate segments keep uncompressed audio so that concatenation never inserts
-# AAC encoder-delay gaps; AAC is encoded once, in the final step.
+# AAC encoder-delay gaps; AAC is encoded once, in the final step. MOV keeps exact
+# frame timestamps through the concat demuxer, but FFmpeg's MOV muxer rejects AV1,
+# so AV1 segments use MP4 (PCM is stored as 'ipcm' there; FFmpeg 6.0 or later).
 INTERMEDIATE_CONTAINER = ".mov"
+INTERMEDIATE_CONTAINER_AV1 = ".mp4"
 INTERMEDIATE_AUDIO_CODEC = "pcm_s16le"
 
 SUPPORTED_AUDIO_FORMATS = ('.mp3', '.flac', '.aac', '.wav')
